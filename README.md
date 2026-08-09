@@ -1,1 +1,175 @@
 # Archiver
+
+Archiver is a content-oriented file cataloging and archival system.
+
+The project is being developed incrementally, starting with a reliable file catalog and later expanding toward managed archives, ingest, tagging, metadata reconciliation, duplicate handling, and local working copies for expensive processing.
+
+The implementation is Python-first. Performance-critical components may later be replaced with Rust only where profiling shows a real need.
+
+## Project status
+
+Early development.
+
+The current implementation target is:
+
+**Plan 001 — Catalog Foundation**
+
+This establishes the core catalog model:
+
+* persistent SQLite catalog;
+* SHA-256 content identity;
+* recursive local-directory scanning;
+* scan history;
+* current-state queries;
+* duplicate-content discovery;
+* safe handling of failed scans.
+
+Archive ingest, tagging, merge policy, destructive duplicate handling, and managed archive storage are intentionally out of scope for this first phase.
+
+## Core ideas
+
+### Content identity
+
+Files are identified by their contents, not by their pathname.
+
+Two files with different names or locations may represent the same content if their cryptographic hashes are equal.
+
+Conversely, the same pathname may contain different content at different times.
+
+### Catalogs and archives
+
+A **catalog** describes files and their metadata.
+
+An **archive** is conceptually a catalog associated with storage that Archiver is explicitly authorized to manage.
+
+The two do not require fundamentally different database models.
+
+### Scans are observations
+
+Scanning a directory is read-only.
+
+A scan records what was observed at a particular location. The latest successful scan defines the current catalog state for that location.
+
+A failed or interrupted scan must never replace the previous successful state.
+
+### History and provenance
+
+The design favors preserving historical information rather than silently overwriting it.
+
+This will later apply to tags and metadata when catalogs are merged or archives are ingested.
+
+## Repository structure
+
+```text
+.
+├── AGENTS.md
+├── README.md
+├── pyproject.toml
+├── docs/
+│   ├── domain-model.md
+│   ├── invariants.md
+│   └── plans/
+│       └── 001-catalog-foundation.md
+├── src/
+│   └── archiver/
+└── tests/
+```
+
+Important project documents:
+
+* [`docs/domain-model.md`](docs/domain-model.md) — conceptual model and terminology.
+* [`docs/invariants.md`](docs/invariants.md) — properties that implementations must preserve.
+* [`docs/plans/001-catalog-foundation.md`](docs/plans/001-catalog-foundation.md) — current implementation plan and acceptance criteria.
+* [`AGENTS.md`](AGENTS.md) — instructions for coding agents working in this repository.
+
+## Development
+
+Requirements:
+
+* Python 3.12 or later
+* [`uv`](https://docs.astral.sh/uv/)
+
+Install dependencies:
+
+```bash
+uv sync
+```
+
+Run tests:
+
+```bash
+uv run pytest
+```
+
+Run linting:
+
+```bash
+uv run ruff check .
+```
+
+Check formatting:
+
+```bash
+uv run ruff format --check .
+```
+
+Run static type checking:
+
+```bash
+uv run mypy src tests
+```
+
+Run the full validation set before considering an implementation task complete.
+
+## Development principles
+
+The project follows a few deliberately conservative rules:
+
+* Prefer simple Python implementations first.
+* Measure before optimizing.
+* Keep content identity independent of path and storage location.
+* Never make destructive filesystem changes implicitly.
+* Keep persistent schema changes explicit and versioned.
+* Preserve historical information where future reconciliation may depend on it.
+* Keep implementation increments small and independently testable.
+* Do not implement functionality belonging to future plans prematurely.
+
+## Current roadmap
+
+The roadmap is intentionally incremental.
+
+### Plan 001 — Catalog foundation
+
+Create and open catalogs, scan local directories, hash file content, persist observations, query current state, and detect duplicate content.
+
+### Later plans
+
+Likely later stages include:
+
+* richer catalog queries;
+* tag and metadata history;
+* catalog comparison and merge;
+* archive-managed storage;
+* source-to-archive ingest;
+* duplicate-resolution policies;
+* local working-copy/cache support for expensive processing;
+* performance profiling and targeted optimization.
+
+These later stages are not yet part of the current implementation contract.
+
+## Working with coding agents
+
+Coding agents should begin by reading:
+
+1. `AGENTS.md`
+2. `docs/domain-model.md`
+3. `docs/invariants.md`
+4. the active file under `docs/plans/`
+
+The repository documentation is the source of truth for implementation decisions.
+
+If an implementation plan conflicts with a documented invariant, the conflict should be surfaced rather than silently resolved by changing the architecture.
+
+## License
+
+License not yet selected.
