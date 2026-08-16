@@ -25,6 +25,7 @@ testpaths = ["tests"]
 [tool.ruff]
 target-version = "py312"
 line-length = 120
+extend-exclude = ["notebooks/plan-001-catalog-tour.ipynb"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]

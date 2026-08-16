@@ -203,6 +203,7 @@ class Catalog:
         location = self._location_for_root(root)
         if location is None:
             return []
+        # Equal content IDs must be contiguous so the loop below can form groups in one pass.
         observations = self._observations_for_query(
             """
             WHERE scans.location_id = ? AND scans.id = locations.current_scan_id
@@ -263,6 +264,7 @@ class Catalog:
             "UPDATE scan_runs SET status = 'completed', completed_at_ns = ? WHERE id = ?",
             (time_ns(), scan_id),
         )
+        # Promote the scan only after every observation was written in this successful transaction.
         self._connection.execute(
             "UPDATE locations SET current_scan_id = ? WHERE id = ?",
             (scan_id, location_id),
@@ -336,6 +338,9 @@ class Catalog:
             duplicate_content_group_count=int(row["duplicate_content_group_count"]),
         )
 
+        # Start with historical observations, join their scan/location/content context, then apply
+
+    # a fixed internal filter and rebuild the rows as typed FileObservation values.
     def _observations_for_query(self, where_clause: str, parameters: tuple[object, ...]) -> list[FileObservation]:
         rows = self._connection.execute(
             f"""

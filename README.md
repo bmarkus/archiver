@@ -95,6 +95,36 @@ Install dependencies:
 uv sync
 ```
 
+## Try it
+
+Run the safe playground example. It creates sample files and a catalog in a temporary directory, then prints the directory path so it can be inspected afterwards:
+
+```powershell
+uv run python examples/playground.py --keep
+```
+
+Open the interactive tutorials:
+
+```powershell
+uv run jupyter lab notebooks
+```
+
+### Create and scan a catalog
+
+Plan 001 is currently a Python library, not a command-line interface. The following PowerShell commands show the equivalent user workflow. Keep the catalog database outside the directory being scanned where practical.
+
+Create a catalog database:
+
+```powershell
+uv run python -c "from pathlib import Path; from archiver import Catalog; catalog = Catalog.create(Path('catalog.sqlite')); print(catalog.catalog_uuid); catalog.close()"
+```
+
+Scan a directory into that catalog:
+
+```powershell
+uv run python -c "from pathlib import Path; from archiver import Catalog; catalog = Catalog.open(Path('catalog.sqlite')); print(catalog.scan_directory(Path(r'C:\path\to\directory'))); catalog.close()"
+```
+
 Run tests:
 
 ```bash
