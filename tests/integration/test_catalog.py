@@ -193,3 +193,131 @@ def test_catalog_database_and_sidecars_are_excluded_when_inside_root(tmp_path: P
     catalog.scan_directory(source)
 
     assert [item.relative_path.as_posix() for item in catalog.current_files(source)] == ["entry.txt"]
+
+
+def test_observation_history_retains_complete_context_across_scans(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    renamed = source / "old-name.txt"
+    removed = source / "removed.txt"
+    changed = source / "changed.txt"
+    renamed.write_bytes(b"unchanged")
+    removed.write_bytes(b"removed")
+    changed.write_bytes(b"first")
+    first_changed_content = hash_file(changed)
+    first_changed_mtime = changed.stat().st_mtime_ns
+    catalog = Catalog.create(tmp_path / "catalog.sqlite")
+
+    catalog.scan_directory(source)
+    renamed.rename(source / "new-name.txt")
+    removed.unlink()
+    changed.write_bytes(b"second")
+    second_changed_content = hash_file(changed)
+    second_changed_mtime = changed.stat().st_mtime_ns
+    catalog.scan_directory(source)
+
+    scans = list(catalog.scan_history())
+    history = list(catalog.observation_history())
+
+    assert [scan.status for scan in scans] == ["completed", "completed"]
+    assert [(observation.scan.id, observation.relative_path.as_posix()) for observation in history] == [
+        (scans[0].id, "changed.txt"),
+        (scans[0].id, "old-name.txt"),
+        (scans[0].id, "removed.txt"),
+        (scans[1].id, "changed.txt"),
+        (scans[1].id, "new-name.txt"),
+    ]
+    first_changed = history[0]
+    second_changed = history[3]
+    assert first_changed.scan.location.root == source.resolve()
+    assert first_changed.content_id == first_changed_content
+    assert first_changed.size_bytes == len(b"first")
+    assert first_changed.mtime_ns == first_changed_mtime
+    assert second_changed.content_id == second_changed_content
+    assert second_changed.size_bytes == len(b"second")
+    assert second_changed.mtime_ns == second_changed_mtime
+
+
+def test_history_is_catalog_wide_and_persists_after_reopen(tmp_path: Path) -> None:
+    first_root = tmp_path / "a-root"
+    second_root = tmp_path / "b-root"
+    first_root.mkdir()
+    second_root.mkdir()
+    (first_root / "first.txt").write_bytes(b"first")
+    (second_root / "second.txt").write_bytes(b"second")
+    database_path = tmp_path / "catalog.sqlite"
+    catalog = Catalog.create(database_path)
+
+    catalog.scan_directory(second_root)
+    catalog.scan_directory(first_root)
+    expected_scans = list(catalog.scan_history())
+    expected_observations = list(catalog.observation_history())
+    catalog.close()
+
+    with Catalog.open(database_path) as reopened:
+        assert list(reopened.scan_history()) == expected_scans
+        assert list(reopened.observation_history()) == expected_observations
+
+    assert [scan.location.root for scan in expected_scans] == [first_root.resolve(), second_root.resolve()]
+    assert [observation.scan.location.root for observation in expected_observations] == [
+        first_root.resolve(),
+        second_root.resolve(),
+    ]
+
+
+def test_history_includes_empty_and_failed_scans_without_observations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    empty_root = tmp_path / "empty"
+    source = tmp_path / "source"
+    empty_root.mkdir()
+    source.mkdir()
+    file_path = source / "entry.txt"
+    file_path.write_bytes(b"first")
+    catalog = Catalog.create(tmp_path / "catalog.sqlite")
+
+    catalog.scan_directory(empty_root)
+    catalog.scan_directory(source)
+    expected_current = catalog.current_files(source)
+    file_path.write_bytes(b"second")
+
+    def fail_hashing(path: Path) -> ContentId:
+        raise OSError("controlled hashing failure")
+
+    monkeypatch.setattr("archiver.catalog.hash_file", fail_hashing)
+    with pytest.raises(ScanFailure, match="scan failed"):
+        catalog.scan_directory(source)
+
+    scans = list(catalog.scan_history())
+    history = list(catalog.observation_history())
+
+    assert [scan.status for scan in scans] == ["completed", "completed", "failed"]
+    assert scans[0].location.root == empty_root.resolve()
+    assert scans[0].completed_at_ns is not None
+    assert scans[2].completed_at_ns is None
+    assert [observation.relative_path.as_posix() for observation in history] == ["entry.txt"]
+    assert catalog.current_files(source) == expected_current
+
+
+def test_observation_history_is_lazy_and_current_queries_exclude_history_only_rows(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    first = source / "first.txt"
+    second = source / "second.txt"
+    first.write_bytes(b"duplicate")
+    second.write_bytes(b"duplicate")
+    catalog = Catalog.create(tmp_path / "catalog.sqlite")
+    catalog.scan_directory(source)
+    historical_content = hash_file(first)
+    history = catalog.observation_history()
+
+    assert iter(history) is history
+    assert next(history).content_id == historical_content
+
+    first.write_bytes(b"current first")
+    second.write_bytes(b"current second")
+    catalog.scan_directory(source)
+
+    assert catalog.find_by_content(source, historical_content) == []
+    assert catalog.duplicate_groups(source) == []
+    assert [item.relative_path.as_posix() for item in catalog.current_files(source)] == ["first.txt", "second.txt"]

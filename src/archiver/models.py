@@ -41,6 +41,28 @@ class FileObservation:
 
 
 @dataclass(frozen=True, slots=True)
+class ScanRun:
+    """One attempted scan of a cataloged location."""
+
+    id: int
+    location: Location
+    status: str
+    started_at_ns: int
+    completed_at_ns: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class HistoricalObservation:
+    """A file observation together with the scan that recorded it."""
+
+    scan: ScanRun
+    relative_path: PurePosixPath
+    content_id: ContentId
+    size_bytes: int
+    mtime_ns: int
+
+
+@dataclass(frozen=True, slots=True)
 class ScanSummary:
     """Counts describing a completed scan."""
 

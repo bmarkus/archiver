@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from .errors import InvalidCatalogError, ScanFailure
 from .hashing import hash_file
-from .models import ContentId, FileObservation, Location, ScanSummary
+from .models import ContentId, FileObservation, HistoricalObservation, Location, ScanRun, ScanSummary
 
 SCHEMA_VERSION = 1
 
@@ -225,6 +225,38 @@ class Catalog:
             groups.append(tuple(current_group))
         return groups
 
+    def scan_history(self) -> Iterator[ScanRun]:
+        """Yield every scan run in deterministic location-root and scan-ID order.
+
+        The catalog must remain open while consuming the iterator.
+        """
+        cursor = self._connection.execute(
+            """
+            SELECT
+                scans.id AS scan_id,
+                locations.id AS location_id,
+                locations.root_path AS root_path,
+                scans.status AS scan_status,
+                scans.started_at_ns AS started_at_ns,
+                scans.completed_at_ns AS completed_at_ns
+            FROM scan_runs AS scans
+            JOIN locations ON locations.id = scans.location_id
+            ORDER BY locations.root_path, scans.id
+            """
+        )
+        for row in cursor:
+            yield self._scan_run_from_row(row)
+
+    def observation_history(self) -> Iterator[HistoricalObservation]:
+        """Yield every persisted file observation in deterministic history order.
+
+        The catalog must remain open while consuming the iterator.
+        """
+        yield from self._historical_observations_for_query(
+            "ORDER BY locations.root_path, scans.id, observations.relative_path",
+            (),
+        )
+
     def _canonical_root(self, root: Path) -> Path:
         if root.is_symlink():
             raise ScanFailure("a scan root must not be a symbolic link")
@@ -338,15 +370,32 @@ class Catalog:
             duplicate_content_group_count=int(row["duplicate_content_group_count"]),
         )
 
-        # Start with historical observations, join their scan/location/content context, then apply
-
-    # a fixed internal filter and rebuild the rows as typed FileObservation values.
     def _observations_for_query(self, where_clause: str, parameters: tuple[object, ...]) -> list[FileObservation]:
-        rows = self._connection.execute(
+        """Return a filtered projection of the shared historical observation query."""
+        return [
+            FileObservation(
+                location=observation.scan.location,
+                relative_path=observation.relative_path,
+                content_id=observation.content_id,
+                size_bytes=observation.size_bytes,
+                mtime_ns=observation.mtime_ns,
+            )
+            for observation in self._historical_observations_for_query(where_clause, parameters)
+        ]
+
+    def _historical_observations_for_query(
+        self, where_clause: str, parameters: tuple[object, ...]
+    ) -> Iterator[HistoricalObservation]:
+        """Yield typed rows from the shared observation/scan/location/content join."""
+        cursor = self._connection.execute(
             f"""
             SELECT
+                scans.id AS scan_id,
                 locations.id AS location_id,
                 locations.root_path AS root_path,
+                scans.status AS scan_status,
+                scans.started_at_ns AS started_at_ns,
+                scans.completed_at_ns AS completed_at_ns,
                 observations.relative_path AS relative_path,
                 observations.size_bytes AS size_bytes,
                 observations.mtime_ns AS mtime_ns,
@@ -359,14 +408,24 @@ class Catalog:
             {where_clause}
             """,
             parameters,
-        ).fetchall()
-        return [
-            FileObservation(
-                location=Location(id=int(row["location_id"]), root=Path(str(row["root_path"]))),
+        )
+        for row in cursor:
+            yield HistoricalObservation(
+                scan=self._scan_run_from_row(row),
                 relative_path=PurePosixPath(str(row["relative_path"])),
                 content_id=ContentId(algorithm=str(row["algorithm"]), digest=str(row["digest"])),
                 size_bytes=int(row["size_bytes"]),
                 mtime_ns=int(row["mtime_ns"]),
             )
-            for row in rows
-        ]
+
+    @staticmethod
+    def _scan_run_from_row(row: sqlite3.Row) -> ScanRun:
+        """Build a scan domain object from a joined scan/location row."""
+        completed_at_ns = row["completed_at_ns"]
+        return ScanRun(
+            id=int(row["scan_id"]),
+            location=Location(id=int(row["location_id"]), root=Path(str(row["root_path"]))),
+            status=str(row["scan_status"]),
+            started_at_ns=int(row["started_at_ns"]),
+            completed_at_ns=None if completed_at_ns is None else int(completed_at_ns),
+        )
