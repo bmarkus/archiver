@@ -70,3 +70,22 @@ class ScanSummary:
     total_bytes_observed: int
     distinct_content_count: int
     duplicate_content_group_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class ScanProgress:
+    """Completed work reported while a scan is in progress."""
+
+    files_observed: int
+    total_bytes_observed: int
+    elapsed_seconds: float
+    current_relative_path: PurePosixPath
+
+
+@dataclass(frozen=True, slots=True)
+class DuplicateSummary:
+    """Aggregate duplicate metrics for one location's current state."""
+
+    duplicate_content_group_count: int
+    duplicate_file_instance_count: int
+    potential_redundant_bytes: int

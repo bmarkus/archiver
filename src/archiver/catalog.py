@@ -3,15 +3,24 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Collection, Iterator
 from contextlib import suppress
 from pathlib import Path, PurePosixPath
-from time import time_ns
+from time import monotonic, time_ns
 from uuid import uuid4
 
 from .errors import InvalidCatalogError, ScanFailure
 from .hashing import hash_file
-from .models import ContentId, FileObservation, HistoricalObservation, Location, ScanRun, ScanSummary
+from .models import (
+    ContentId,
+    DuplicateSummary,
+    FileObservation,
+    HistoricalObservation,
+    Location,
+    ScanProgress,
+    ScanRun,
+    ScanSummary,
+)
 
 SCHEMA_VERSION = 1
 
@@ -123,6 +132,11 @@ class Catalog:
         assert row is not None
         return int(row["schema_version"])
 
+    @property
+    def database_path(self) -> Path:
+        """Return the canonical path of this catalog's SQLite database."""
+        return self._database_path
+
     def close(self) -> None:
         """Close the SQLite connection."""
         self._connection.close()
@@ -133,15 +147,27 @@ class Catalog:
     def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
         self.close()
 
-    def scan_directory(self, root: Path) -> ScanSummary:
+    def scan_directory(
+        self,
+        root: Path,
+        *,
+        excluded_directories: Collection[Path] = (),
+        progress_callback: Callable[[ScanProgress], None] | None = None,
+    ) -> ScanSummary:
         """Read a local directory and atomically make its scan current on success."""
         canonical_root = self._canonical_root(root)
+        canonical_excluded_directories = frozenset(
+            directory.resolve(strict=False) for directory in excluded_directories
+        )
         location = self._get_or_create_location(canonical_root)
         scan_id = self._start_scan(location.id)
+        started_at = monotonic()
+        files_observed = 0
+        total_bytes_observed = 0
 
         try:
             with self._connection:
-                for path in self._regular_files(canonical_root):
+                for path in self._regular_files(canonical_root, canonical_excluded_directories):
                     if self._is_catalog_file(path):
                         continue
                     stat = path.stat()
@@ -162,6 +188,17 @@ class Catalog:
                             stat.st_mtime_ns,
                         ),
                     )
+                    files_observed += 1
+                    total_bytes_observed += stat.st_size
+                    if progress_callback is not None:
+                        progress_callback(
+                            ScanProgress(
+                                files_observed=files_observed,
+                                total_bytes_observed=total_bytes_observed,
+                                elapsed_seconds=monotonic() - started_at,
+                                current_relative_path=relative_path,
+                            )
+                        )
                 self._complete_scan(location.id, scan_id)
         except Exception as error:
             self._mark_failed(scan_id)
@@ -224,6 +261,65 @@ class Catalog:
         if len(current_group) > 1:
             groups.append(tuple(current_group))
         return groups
+
+    def current_scan(self, root: Path) -> ScanRun | None:
+        """Return the most recent successful scan for one location, if one exists."""
+        location = self._location_for_root(root)
+        if location is None:
+            return None
+        row = self._connection.execute(
+            """
+            SELECT
+                scans.id AS scan_id,
+                locations.id AS location_id,
+                locations.root_path AS root_path,
+                scans.status AS scan_status,
+                scans.started_at_ns AS started_at_ns,
+                scans.completed_at_ns AS completed_at_ns
+            FROM locations
+            JOIN scan_runs AS scans ON scans.id = locations.current_scan_id
+            WHERE locations.id = ?
+            """,
+            (location.id,),
+        ).fetchone()
+        return None if row is None else self._scan_run_from_row(row)
+
+    def current_summary(self, root: Path) -> ScanSummary | None:
+        """Return the summary for the current successful scan, if one exists."""
+        current_scan = self.current_scan(root)
+        return None if current_scan is None else self._scan_summary(current_scan.id)
+
+    def duplicate_summary(self, root: Path) -> DuplicateSummary:
+        """Return aggregate duplicate metrics for a location's current successful scan."""
+        current_scan = self.current_scan(root)
+        if current_scan is None:
+            return DuplicateSummary(
+                duplicate_content_group_count=0,
+                duplicate_file_instance_count=0,
+                potential_redundant_bytes=0,
+            )
+        row = self._connection.execute(
+            """
+            SELECT
+                COUNT(*) AS duplicate_content_group_count,
+                COALESCE(SUM(copy_count), 0) AS duplicate_file_instance_count,
+                COALESCE(SUM((copy_count - 1) * size_bytes), 0) AS potential_redundant_bytes
+            FROM (
+                SELECT content_id, MAX(size_bytes) AS size_bytes, COUNT(*) AS copy_count
+                FROM file_observations
+                WHERE scan_id = ?
+                GROUP BY content_id
+                HAVING COUNT(*) > 1
+            )
+            """,
+            (current_scan.id,),
+        ).fetchone()
+        assert row is not None
+        return DuplicateSummary(
+            duplicate_content_group_count=int(row["duplicate_content_group_count"]),
+            duplicate_file_instance_count=int(row["duplicate_file_instance_count"]),
+            potential_redundant_bytes=int(row["potential_redundant_bytes"]),
+        )
 
     def scan_history(self) -> Iterator[ScanRun]:
         """Yield every scan run in deterministic location-root and scan-ID order.
@@ -326,12 +422,13 @@ class Catalog:
         assert cursor.lastrowid is not None
         return int(cursor.lastrowid)
 
-    def _regular_files(self, directory: Path) -> Iterator[Path]:
+    def _regular_files(self, directory: Path, excluded_directories: frozenset[Path]) -> Iterator[Path]:
         for entry in sorted(directory.iterdir(), key=lambda candidate: candidate.name):
             if entry.is_symlink():
                 continue
             if entry.is_dir():
-                yield from self._regular_files(entry)
+                if entry.resolve(strict=False) not in excluded_directories:
+                    yield from self._regular_files(entry, excluded_directories)
             elif entry.is_file():
                 yield entry
 

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from archiver import Catalog, ContentId, InvalidCatalogError, ScanFailure
+from archiver import Catalog, ContentId, InvalidCatalogError, ScanFailure, ScanProgress
 from archiver.hashing import hash_file
 
 
@@ -321,3 +321,68 @@ def test_observation_history_is_lazy_and_current_queries_exclude_history_only_ro
     assert catalog.find_by_content(source, historical_content) == []
     assert catalog.duplicate_groups(source) == []
     assert [item.relative_path.as_posix() for item in catalog.current_files(source)] == ["first.txt", "second.txt"]
+
+
+def test_scan_progress_reports_persisted_completed_work_and_posix_paths(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    (source / "nested").mkdir(parents=True)
+    (source / "empty").touch()
+    (source / "nested" / "one.txt").write_bytes(b"same")
+    (source / "two.txt").write_bytes(b"same")
+    catalog = Catalog.create(tmp_path / "catalog.sqlite")
+    progress: list[ScanProgress] = []
+
+    summary = catalog.scan_directory(source, progress_callback=progress.append)
+
+    assert summary.files_observed == 3
+    assert [
+        (item.files_observed, item.total_bytes_observed, item.current_relative_path.as_posix()) for item in progress
+    ] == [
+        (1, 0, "empty"),
+        (2, 4, "nested/one.txt"),
+        (3, 8, "two.txt"),
+    ]
+    assert all(item.elapsed_seconds >= 0 for item in progress)
+    assert [item.relative_path.as_posix() for item in catalog.current_files(source)] == [
+        "empty",
+        "nested/one.txt",
+        "two.txt",
+    ]
+
+
+def test_progress_callback_failure_preserves_previous_current_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    file_path = source / "entry.txt"
+    file_path.write_bytes(b"first")
+    catalog = Catalog.create(tmp_path / "catalog.sqlite")
+    catalog.scan_directory(source)
+    expected = catalog.current_files(source)
+    file_path.write_bytes(b"second")
+
+    def fail_progress(progress: ScanProgress) -> None:
+        raise RuntimeError("controlled callback failure")
+
+    with pytest.raises(ScanFailure, match="scan failed"):
+        catalog.scan_directory(source, progress_callback=fail_progress)
+
+    assert catalog.current_files(source) == expected
+
+
+def test_progress_excludes_control_directory_and_preserves_source(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    visible = source / "entry.txt"
+    visible.write_bytes(b"source")
+    excluded = source / ".archiver"
+    excluded.mkdir()
+    (excluded / "internal.txt").write_bytes(b"control")
+    catalog = Catalog.create(tmp_path / "catalog.sqlite")
+    progress: list[ScanProgress] = []
+
+    catalog.scan_directory(source, excluded_directories=(excluded,), progress_callback=progress.append)
+
+    assert [item.current_relative_path.as_posix() for item in progress] == ["entry.txt"]
+    assert visible.read_bytes() == b"source"

@@ -109,22 +109,23 @@ Open the interactive tutorials:
 uv run jupyter lab notebooks
 ```
 
-### Create and scan a catalog
+### Catalog CLI
 
-Plan 001 is currently a Python library, not a command-line interface. The following PowerShell commands show the equivalent user workflow. Keep the catalog database outside the directory being scanned where practical.
-
-Create a catalog database:
+Create a catalog inside a directory. Initialization does not scan its contents:
 
 ```powershell
-uv run python -c "from pathlib import Path; from archiver import Catalog; catalog = Catalog.create(Path('catalog.sqlite')); print(catalog.catalog_uuid); catalog.close()"
+uv run archiver catalog init C:\path\to\directory
 ```
 
-Scan a directory into that catalog:
+Scan the directory without modifying its source files, then inspect its current state and duplicate-content summary:
 
 ```powershell
-uv run python -c "from pathlib import Path; from archiver import Catalog; catalog = Catalog.open(Path('catalog.sqlite')); print(catalog.scan_directory(Path(r'C:\path\to\directory'))); catalog.close()"
+uv run archiver catalog scan C:\path\to\directory
+uv run archiver catalog info C:\path\to\directory
+uv run archiver catalog duplicates C:\path\to\directory
 ```
 
+The SQLite catalog is stored at `.archiver/catalog.sqlite` below the chosen root. The `.archiver` control directory is excluded from scans.
 Run tests:
 
 ```bash
