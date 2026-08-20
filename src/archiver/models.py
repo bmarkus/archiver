@@ -3,6 +3,9 @@
 import string
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import Literal, TypeAlias
+
+CurrentFileSort: TypeAlias = Literal["path", "size", "date"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +41,15 @@ class FileObservation:
     content_id: ContentId
     size_bytes: int
     mtime_ns: int
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentFileSearch:
+    """A bounded current-file query with its total number of matches."""
+
+    files: tuple[FileObservation, ...]
+    total_matches: int
+    total_size_bytes: int
 
 
 @dataclass(frozen=True, slots=True)

@@ -4,6 +4,8 @@ from .catalog import Catalog
 from .errors import InvalidCatalogError, ScanFailure
 from .models import (
     ContentId,
+    CurrentFileSearch,
+    CurrentFileSort,
     DuplicateSummary,
     FileObservation,
     HistoricalObservation,
@@ -16,6 +18,8 @@ from .models import (
 __all__ = [
     "Catalog",
     "ContentId",
+    "CurrentFileSearch",
+    "CurrentFileSort",
     "DuplicateSummary",
     "FileObservation",
     "HistoricalObservation",

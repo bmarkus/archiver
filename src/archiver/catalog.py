@@ -13,6 +13,8 @@ from .errors import InvalidCatalogError, ScanFailure
 from .hashing import hash_file
 from .models import (
     ContentId,
+    CurrentFileSearch,
+    CurrentFileSort,
     DuplicateSummary,
     FileObservation,
     HistoricalObservation,
@@ -221,6 +223,75 @@ class Catalog:
             (location.id,),
         )
 
+    def search_current_files(
+        self,
+        root: Path,
+        *,
+        path_glob: str | None = None,
+        sort_by: CurrentFileSort = "path",
+        reverse: bool = False,
+        limit: int = 20,
+    ) -> CurrentFileSearch:
+        """Return a bounded, deterministically ordered query over one location's current files."""
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+        location = self._location_for_root(root)
+        if location is None:
+            return CurrentFileSearch(files=(), total_matches=0, total_size_bytes=0)
+
+        order_column, default_direction = self._current_file_order(sort_by)
+        direction = self._reverse_direction(default_direction) if reverse else default_direction
+        where_clause = "WHERE scans.location_id = ? AND scans.id = locations.current_scan_id"
+        parameters: list[object] = [location.id]
+        if path_glob is not None:
+            where_clause += " AND observations.relative_path GLOB ?"
+            parameters.append(path_glob)
+
+        count_row = self._connection.execute(
+            f"""
+            SELECT COUNT(*) AS total_matches, COALESCE(SUM(observations.size_bytes), 0) AS total_size_bytes
+            FROM file_observations AS observations
+            JOIN scan_runs AS scans ON scans.id = observations.scan_id
+            JOIN locations ON locations.id = scans.location_id
+            {where_clause}
+            """,
+            parameters,
+        ).fetchone()
+        assert count_row is not None
+        rows = self._connection.execute(
+            f"""
+            SELECT
+                observations.relative_path AS relative_path,
+                observations.size_bytes AS size_bytes,
+                observations.mtime_ns AS mtime_ns,
+                content.algorithm AS algorithm,
+                content.digest AS digest
+            FROM file_observations AS observations
+            JOIN scan_runs AS scans ON scans.id = observations.scan_id
+            JOIN locations ON locations.id = scans.location_id
+            JOIN content ON content.id = observations.content_id
+            {where_clause}
+            ORDER BY {order_column} {direction}, observations.relative_path ASC
+            LIMIT ?
+            """,
+            (*parameters, limit),
+        )
+        files = tuple(
+            FileObservation(
+                location=location,
+                relative_path=PurePosixPath(str(row["relative_path"])),
+                content_id=ContentId(algorithm=str(row["algorithm"]), digest=str(row["digest"])),
+                size_bytes=int(row["size_bytes"]),
+                mtime_ns=int(row["mtime_ns"]),
+            )
+            for row in rows
+        )
+        return CurrentFileSearch(
+            files=files,
+            total_matches=int(count_row["total_matches"]),
+            total_size_bytes=int(count_row["total_size_bytes"]),
+        )
+
     def find_by_content(self, root: Path, content_id: ContentId) -> list[FileObservation]:
         """Return current observations at one location with a supplied content identity."""
         location = self._location_for_root(root)
@@ -352,6 +423,20 @@ class Catalog:
             "ORDER BY locations.root_path, scans.id, observations.relative_path",
             (),
         )
+
+    @staticmethod
+    def _current_file_order(sort_by: CurrentFileSort) -> tuple[str, str]:
+        if sort_by == "path":
+            return "observations.relative_path", "ASC"
+        if sort_by == "size":
+            return "observations.size_bytes", "DESC"
+        if sort_by == "date":
+            return "observations.mtime_ns", "DESC"
+        raise ValueError(f"unsupported current-file sort: {sort_by}")
+
+    @staticmethod
+    def _reverse_direction(direction: str) -> str:
+        return "DESC" if direction == "ASC" else "ASC"
 
     def _canonical_root(self, root: Path) -> Path:
         if root.is_symlink():

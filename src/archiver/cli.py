@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -11,7 +12,7 @@ from typing import TextIO
 
 from .catalog import Catalog
 from .errors import InvalidCatalogError, ScanFailure
-from .models import DuplicateSummary, ScanProgress, ScanRun, ScanSummary
+from .models import CurrentFileSort, DuplicateSummary, FileObservation, ScanProgress, ScanRun, ScanSummary
 
 _CONTROL_DIRECTORY_NAME = ".archiver"
 _DATABASE_FILE_NAME = "catalog.sqlite"
@@ -31,6 +32,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             _scan_catalog(arguments.root, no_progress=arguments.no_progress, progress_every=arguments.progress_every)
         elif arguments.catalog_command == "duplicates":
             _show_duplicate_summary(arguments.root)
+        elif arguments.catalog_command == "files":
+            _show_files(
+                arguments.root,
+                path_glob=arguments.path_glob,
+                limit=arguments.limit,
+                sort_by=arguments.sort_by,
+                reverse=arguments.reverse,
+            )
         else:
             parser.error("a catalog command is required")
     except (InvalidCatalogError, ScanFailure, OSError) as error:
@@ -50,6 +59,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ("info", "show catalog and current-scan information"),
         ("scan", "scan the catalog root"),
         ("duplicates", "show aggregate duplicate metrics"),
+        ("files", "browse bounded current-file results"),
     ):
         subparser = catalog_commands.add_parser(command, help=help_text)
         subparser.add_argument("root", type=Path, metavar="ROOT")
@@ -62,6 +72,23 @@ def _build_parser() -> argparse.ArgumentParser:
                 metavar="FILES",
                 help="render progress every FILES files (default: 100)",
             )
+        if command == "files":
+            subparser.add_argument("--path", dest="path_glob", metavar="GLOB", help="match POSIX relative paths")
+            subparser.add_argument(
+                "--limit",
+                type=_positive_int,
+                default=20,
+                metavar="N",
+                help="maximum rows to display (default: 20)",
+            )
+            subparser.add_argument(
+                "--sort",
+                dest="sort_by",
+                choices=("path", "size", "date"),
+                default="path",
+                help="sort by path, size, or observed modification date (default: path)",
+            )
+            subparser.add_argument("--reverse", action="store_true", help="invert the selected sort direction")
 
     return parser
 
@@ -127,6 +154,86 @@ def _show_duplicate_summary(root_argument: Path) -> None:
             print("Current scan: none")
             return
         _print_duplicate_summary(catalog.duplicate_summary(root))
+
+
+def _show_files(
+    root_argument: Path,
+    *,
+    path_glob: str | None,
+    limit: int,
+    sort_by: CurrentFileSort,
+    reverse: bool,
+) -> None:
+    root, database_path = _catalog_paths(root_argument)
+    with Catalog.open(database_path) as catalog:
+        result = catalog.search_current_files(
+            root,
+            path_glob=path_glob,
+            limit=limit,
+            sort_by=sort_by,
+            reverse=reverse,
+        )
+    direction = _sort_direction(sort_by, reverse)
+    print("Current files")
+    print(f"Root: {root}")
+    print(f"Sort: {sort_by} ({direction})")
+    if not result.files:
+        print("No matching files.")
+    else:
+        for line in _format_file_table(result.files, _terminal_width()):
+            print(line)
+    print(_format_file_match_summary(result.total_matches, result.total_size_bytes, len(result.files)))
+
+
+def _format_file_table(files: tuple[FileObservation, ...], terminal_width: int) -> tuple[str, ...]:
+    modified_width = 20
+    size_width = 10
+    digest_width = 13
+    separator_width = 9
+    path_width = max(20, terminal_width - modified_width - size_width - digest_width - separator_width)
+    header = f"{'Modified (UTC)':<{modified_width}} | {'Size':>{size_width}} | {'SHA-256':<{digest_width}} | Path"
+    divider = "-" * len(header)
+    rows = tuple(
+        f"{_format_file_mtime(file_observation.mtime_ns):<{modified_width}} | "
+        f"{_format_byte_count(file_observation.size_bytes):>{size_width}} | "
+        f"{_short_digest(file_observation.content_id.digest):<{digest_width}} | "
+        f"{_truncate_text(file_observation.relative_path.as_posix(), path_width)}"
+        for file_observation in files
+    )
+    return (header, divider, *rows)
+
+
+def _format_file_match_summary(total_matches: int, total_size_bytes: int, displayed_count: int) -> str:
+    summary = f"Matched: {total_matches:,} files · {_format_byte_count(total_size_bytes)} total"
+    if displayed_count < total_matches:
+        return f"{summary} (showing first {displayed_count})"
+    return f"{summary} (showing all {displayed_count})"
+
+
+def _terminal_width() -> int:
+    return shutil.get_terminal_size(fallback=(120, 24)).columns
+
+
+def _format_file_mtime(timestamp_ns: int) -> str:
+    seconds, _ = divmod(timestamp_ns, 1_000_000_000)
+    return datetime.fromtimestamp(seconds, tz=UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _short_digest(digest: str) -> str:
+    return f"{digest[:12]}…"
+
+
+def _truncate_text(text: str, width: int) -> str:
+    if len(text) <= width:
+        return text
+    return f"{text[: width - 1]}…"
+
+
+def _sort_direction(sort_by: CurrentFileSort, reverse: bool) -> str:
+    direction = "ascending" if sort_by == "path" else "descending"
+    if reverse:
+        return "descending" if direction == "ascending" else "ascending"
+    return direction
 
 
 def _catalog_paths(root_argument: Path) -> tuple[Path, Path]:

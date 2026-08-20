@@ -17,4 +17,5 @@ Each subplan must identify its parent plan and include created, implementation, 
 | 001.2 | [Pandas DataFrame Adapters](001.2-pandas-dataframe-adapters.md) | Implemented (pending commit) | 001 | Flat DataFrame adapters for typed current, history, and duplicate-group query results. |
 | 001.3 | [Summary-First Catalog CLI](001.3-catalog-cli.md) | Implemented (pending commit) | 001 | Small in-root catalog CLI for initialization, scanning, status, and duplicate summaries. |
 | 001.4 | [Streaming Scan Progress](001.4-streaming-scan-progress.md) | Planned (active) | 001 | Interactive, single-pass progress feedback for CLI scans without a pre-count. |
+| 001.5 | [Bounded Current-File Browsing](001.5-bounded-current-file-browsing.md) | Implemented (pending commit) | 001 | Bounded, sortable current-file exploration with aggregate matched size. |
 
