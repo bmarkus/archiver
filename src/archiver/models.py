@@ -6,6 +6,7 @@ from pathlib import Path, PurePosixPath
 from typing import Literal, TypeAlias
 
 CurrentFileSort: TypeAlias = Literal["path", "size", "date"]
+RefreshChangeKind: TypeAlias = Literal["new", "unchanged", "modified", "missing"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,7 +29,7 @@ class ContentId:
 class Location:
     """A cataloged local filesystem root."""
 
-    id: int
+    id: int | None
     root: Path
 
 
@@ -41,6 +42,53 @@ class FileObservation:
     content_id: ContentId
     size_bytes: int
     mtime_ns: int
+
+
+@dataclass(frozen=True, slots=True)
+class RefreshChange:
+    """One path-level difference between a filesystem observation and the current catalog."""
+
+    kind: RefreshChangeKind
+    relative_path: PurePosixPath
+    previous: FileObservation | None
+    current: FileObservation | None
+    hash_reused: bool
+
+
+@dataclass(frozen=True, slots=True)
+class RefreshSummary:
+    """Counts of the path changes detected during one reconciliation."""
+
+    new_files: int
+    unchanged_files: int
+    modified_files: int
+    missing_files: int
+
+
+@dataclass(frozen=True, slots=True)
+class RefreshChangeSet:
+    """Filesystem observations reconciled against one catalog-current baseline.
+
+    The baseline detects catalog staleness at apply time. It does not lock the
+    filesystem or claim that files remain unchanged after reconciliation.
+    """
+
+    location: Location
+    baseline_scan_id: int | None
+    changes: tuple[RefreshChange, ...]
+
+    @property
+    def summary(self) -> RefreshSummary:
+        """Return deterministic aggregate counts for the change set."""
+        counts = {kind: 0 for kind in ("new", "unchanged", "modified", "missing")}
+        for change in self.changes:
+            counts[change.kind] += 1
+        return RefreshSummary(
+            new_files=counts["new"],
+            unchanged_files=counts["unchanged"],
+            modified_files=counts["modified"],
+            missing_files=counts["missing"],
+        )
 
 
 @dataclass(frozen=True, slots=True)

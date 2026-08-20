@@ -1,7 +1,7 @@
 """Content-oriented file cataloging."""
 
 from .catalog import Catalog
-from .errors import InvalidCatalogError, ScanFailure
+from .errors import InvalidCatalogError, RefreshFailure, ScanFailure, StaleRefreshError
 from .models import (
     ContentId,
     CurrentFileSearch,
@@ -10,6 +10,10 @@ from .models import (
     FileObservation,
     HistoricalObservation,
     Location,
+    RefreshChange,
+    RefreshChangeKind,
+    RefreshChangeSet,
+    RefreshSummary,
     ScanProgress,
     ScanRun,
     ScanSummary,
@@ -25,6 +29,12 @@ __all__ = [
     "HistoricalObservation",
     "InvalidCatalogError",
     "Location",
+    "RefreshChange",
+    "RefreshChangeKind",
+    "RefreshChangeSet",
+    "RefreshFailure",
+    "RefreshSummary",
+    "StaleRefreshError",
     "ScanFailure",
     "ScanProgress",
     "ScanRun",

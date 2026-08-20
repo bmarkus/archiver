@@ -12,7 +12,7 @@ Early development.
 
 The current implementation target is:
 
-**Plan 001 — Catalog Foundation**
+**Plan 002 — Catalog Refresh and Reconciliation**
 
 This establishes the core catalog model:
 
@@ -23,6 +23,7 @@ This establishes the core catalog model:
 * current-state queries;
 * duplicate-content discovery;
 * safe handling of failed scans.
+* filesystem reconciliation and atomic refresh application;
 
 Archive ingest, tagging, merge policy, destructive duplicate handling, and managed archive storage are intentionally out of scope for this first phase.
 
@@ -69,7 +70,8 @@ This will later apply to tags and metadata when catalogs are merged or archives 
 │   ├── domain-model.md
 │   ├── invariants.md
 │   └── plans/
-│       └── 001-catalog-foundation.md
+│       ├── 001-catalog-foundation.md
+│       └── 002-catalog-refresh-and-reconciliation.md
 ├── src/
 │   └── archiver/
 └── tests/
@@ -79,7 +81,7 @@ Important project documents:
 
 * [`docs/domain-model.md`](docs/domain-model.md) — conceptual model and terminology.
 * [`docs/invariants.md`](docs/invariants.md) — properties that implementations must preserve.
-* [`docs/plans/001-catalog-foundation.md`](docs/plans/001-catalog-foundation.md) — current implementation plan and acceptance criteria.
+* [`docs/plans/002-catalog-refresh-and-reconciliation.md`](docs/plans/002-catalog-refresh-and-reconciliation.md) — current implementation plan and refresh design.
 * [`AGENTS.md`](AGENTS.md) — instructions for coding agents working in this repository.
 
 ## Development

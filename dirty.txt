@@ -1,0 +1,2 @@
+key design pinciple in managing (i.e. comparing) catalogs:
+observe → compare → describe → apply

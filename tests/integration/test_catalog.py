@@ -176,8 +176,8 @@ def test_failed_scan_preserves_previous_current_state(tmp_path: Path, monkeypatc
     def fail_hashing(path: Path) -> ContentId:
         raise OSError("controlled hashing failure")
 
-    monkeypatch.setattr("archiver.catalog.hash_file", fail_hashing)
-    with pytest.raises(ScanFailure, match="scan failed"):
+    monkeypatch.setattr("archiver.catalog.hash_file_stably", fail_hashing)
+    with pytest.raises(ScanFailure, match="reconciliation failed"):
         catalog.scan_directory(source)
 
     assert catalog.current_files(source) == expected
@@ -284,17 +284,16 @@ def test_history_includes_empty_and_failed_scans_without_observations(
     def fail_hashing(path: Path) -> ContentId:
         raise OSError("controlled hashing failure")
 
-    monkeypatch.setattr("archiver.catalog.hash_file", fail_hashing)
-    with pytest.raises(ScanFailure, match="scan failed"):
+    monkeypatch.setattr("archiver.catalog.hash_file_stably", fail_hashing)
+    with pytest.raises(ScanFailure, match="reconciliation failed"):
         catalog.scan_directory(source)
 
     scans = list(catalog.scan_history())
     history = list(catalog.observation_history())
 
-    assert [scan.status for scan in scans] == ["completed", "completed", "failed"]
+    assert [scan.status for scan in scans] == ["completed", "completed"]
     assert scans[0].location.root == empty_root.resolve()
     assert scans[0].completed_at_ns is not None
-    assert scans[2].completed_at_ns is None
     assert [observation.relative_path.as_posix() for observation in history] == ["entry.txt"]
     assert catalog.current_files(source) == expected_current
 
@@ -365,7 +364,7 @@ def test_progress_callback_failure_preserves_previous_current_state(
     def fail_progress(progress: ScanProgress) -> None:
         raise RuntimeError("controlled callback failure")
 
-    with pytest.raises(ScanFailure, match="scan failed"):
+    with pytest.raises(ScanFailure, match="reconciliation failed"):
         catalog.scan_directory(source, progress_callback=fail_progress)
 
     assert catalog.current_files(source) == expected

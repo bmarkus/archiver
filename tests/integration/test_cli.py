@@ -88,6 +88,8 @@ def test_catalog_scan_excludes_control_directory_and_preserves_source(
     output = capsys.readouterr().out
     assert "Scan completed" in output
     assert "Files observed: 1" in output
+    assert "New files: 1" in output
+    assert "Unchanged files: 0" in output
     assert "Total size observed: 14 B" in output
     assert source.read_bytes() == b"source content"
     with Catalog.open(root / ".archiver" / "catalog.sqlite") as catalog:
@@ -143,10 +145,10 @@ def test_failed_cli_scan_preserves_current_state(
     def fail_hashing(path: Path) -> ContentId:
         raise OSError("controlled hashing failure")
 
-    monkeypatch.setattr("archiver.catalog.hash_file", fail_hashing)
+    monkeypatch.setattr("archiver.catalog.hash_file_stably", fail_hashing)
     assert main(["catalog", "scan", str(root)]) == 1
 
-    assert "scan failed" in capsys.readouterr().err
+    assert "reconciliation failed" in capsys.readouterr().err
     with Catalog.open(root / ".archiver" / "catalog.sqlite") as catalog:
         assert catalog.current_files(root)[0].content_id == expected_content
 
@@ -216,16 +218,18 @@ def test_catalog_scan_progress_ends_before_error_output(
     terminal = _TerminalBuffer()
     monkeypatch.setattr("archiver.cli.sys.stderr", terminal)
 
-    def fail_hashing(path: Path) -> ContentId:
+    def fail_hashing(path: Path) -> tuple[ContentId, int, int]:
         if path.name == "second.txt":
             raise OSError("controlled hashing failure")
-        return hash_file(path)
+        content_id = hash_file(path)
+        metadata = path.stat()
+        return content_id, metadata.st_size, metadata.st_mtime_ns
 
-    monkeypatch.setattr("archiver.catalog.hash_file", fail_hashing)
+    monkeypatch.setattr("archiver.catalog.hash_file_stably", fail_hashing)
     assert main(["catalog", "scan", str(root)]) == 1
 
     assert "Scanned 1 files" in terminal.getvalue()
-    assert "\narchiver: scan failed" in terminal.getvalue()
+    assert "\narchiver: reconciliation failed" in terminal.getvalue()
 
 
 def test_progress_renderer_clears_a_shorter_filename_and_honors_file_interval() -> None:

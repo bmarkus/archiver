@@ -12,7 +12,15 @@ from typing import TextIO
 
 from .catalog import Catalog
 from .errors import InvalidCatalogError, ScanFailure
-from .models import CurrentFileSort, DuplicateSummary, FileObservation, ScanProgress, ScanRun, ScanSummary
+from .models import (
+    CurrentFileSort,
+    DuplicateSummary,
+    FileObservation,
+    RefreshSummary,
+    ScanProgress,
+    ScanRun,
+    ScanSummary,
+)
 
 _CONTROL_DIRECTORY_NAME = ".archiver"
 _DATABASE_FILE_NAME = "catalog.sqlite"
@@ -132,16 +140,18 @@ def _scan_catalog(root_argument: Path, *, no_progress: bool, progress_every: int
     )
     with Catalog.open(database_path) as catalog:
         try:
-            summary = catalog.scan_directory(
+            change_set = catalog.reconcile_directory(
                 root,
                 excluded_directories=(root / _CONTROL_DIRECTORY_NAME,),
                 progress_callback=None if renderer is None else renderer.render,
             )
+            summary = catalog.apply_refresh(change_set)
         finally:
             if renderer is not None:
                 renderer.finish()
         print("Scan completed")
         print(f"Root: {root}")
+        _print_refresh_summary(change_set.summary)
         _print_scan_summary(summary)
 
 
@@ -268,6 +278,13 @@ def _print_scan_summary(summary: ScanSummary) -> None:
     print(f"Total size observed: {_format_byte_count(summary.total_bytes_observed)}")
     print(f"Distinct content: {summary.distinct_content_count}")
     print(f"Duplicate groups: {summary.duplicate_content_group_count}")
+
+
+def _print_refresh_summary(summary: RefreshSummary) -> None:
+    print(f"New files: {summary.new_files}")
+    print(f"Unchanged files: {summary.unchanged_files}")
+    print(f"Modified files: {summary.modified_files}")
+    print(f"Missing files: {summary.missing_files}")
 
 
 def _print_duplicate_summary(summary: DuplicateSummary) -> None:

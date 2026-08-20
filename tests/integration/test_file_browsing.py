@@ -79,7 +79,7 @@ def test_search_current_files_excludes_failed_scan_state(tmp_path: Path) -> None
         def fail_progress(_: object) -> None:
             raise RuntimeError("controlled callback failure")
 
-        with pytest.raises(ScanFailure, match="scan failed"):
+        with pytest.raises(ScanFailure, match="reconciliation failed"):
             catalog.scan_directory(root, progress_callback=fail_progress)
 
         result = catalog.search_current_files(root, limit=20)
