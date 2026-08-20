@@ -111,18 +111,23 @@ uv run jupyter lab notebooks
 
 ### Catalog CLI
 
-Create a catalog inside a directory. Initialization does not scan its contents:
+CLI for the archiver (explore on the shell)
 
 ```powershell
-uv run archiver catalog init C:\path\to\directory
-```
 
-Scan the directory without modifying its source files, then inspect its current state and duplicate-content summary:
+uv run archiver catalog -h
+usage: archiver catalog [-h] {init,info,scan,duplicates} ...
 
-```powershell
-uv run archiver catalog scan C:\path\to\directory
-uv run archiver catalog info C:\path\to\directory
-uv run archiver catalog duplicates C:\path\to\directory
+positional arguments:
+  {init,info,scan,duplicates}
+    init                create a catalog without scanning
+    info                show catalog and current-scan information
+    scan                scan the catalog root
+    duplicates          show aggregate duplicate metrics
+
+options:
+  -h, --help            show this help message and exit
+
 ```
 
 The SQLite catalog is stored at `.archiver/catalog.sqlite` below the chosen root. The `.archiver` control directory is excluded from scans.
