@@ -13,12 +13,19 @@ Read these files before implementation or architectural changes:
 1. `docs/domain-model.md`
 2. `docs/invariants.md`
 3. The active plan under `docs/plans/`
+4. The applicable plan under `docs/bugfixes/` when correcting a behavior bug.
 
 For the first implementation increment, the active plan is:
 
 - `docs/plans/001-catalog-foundation.md`
 
 The domain model and invariants are authoritative. If an implementation plan appears to conflict with them, stop changing the design and report the conflict.
+
+## Bug-fix plans
+
+Before changing behavior to correct a bug, add a concise plan in `docs/bugfixes/`.
+Each plan must record the reproduction, root cause, affected invariants, proposed
+solution, non-goals, and acceptance tests. Update its outcome after validation.
 
 ## Scope discipline
 

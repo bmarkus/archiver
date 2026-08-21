@@ -3,7 +3,7 @@
 from hashlib import sha256
 from os import fstat
 from pathlib import Path
-from stat import S_ISREG
+from stat import S_IFMT, S_ISREG
 from typing import BinaryIO
 
 from .models import ContentId
@@ -27,7 +27,7 @@ def _stat_signature(metadata: object) -> tuple[int, int, int, int, int]:
     return (
         int(getattr(metadata, "st_dev")),
         int(getattr(metadata, "st_ino")),
-        int(getattr(metadata, "st_mode")),
+        int(S_IFMT(getattr(metadata, "st_mode"))),
         int(getattr(metadata, "st_size")),
         int(getattr(metadata, "st_mtime_ns")),
     )
