@@ -16,8 +16,10 @@ dev = [
     "ipykernel>=7.3.0",
     "jupyterlab>=4.6.2",
     "mypy>=1.19.0",
+    "nbstripout>=0.9.1",
     "pandas-stubs>=3.0.5.260730",
     "pytest>=9.0.0",
+    "python-dotenv>=1.2.2",
     "ruff>=0.14.0",
 ]
 

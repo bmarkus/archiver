@@ -111,6 +111,44 @@ Open the interactive tutorials:
 uv run jupyter lab notebooks
 ```
 
+### Notebook privacy and commits
+Public tutorials:
+
+* `notebooks/public/plan-001-catalog-tour.ipynb` — scanning, duplicate discovery, rename identity, and failed-scan safety.
+* `notebooks/public/catalog-refresh-and-reconciliation.ipynb` — dry-run reconciliation, atomic refresh application, stale-baseline protection, and equivalent CLI use.
+
+
+Public tutorials live in `notebooks/public/` and use only temporary, synthetic data. Personal exploration belongs in `notebooks/private/`, which Git ignores. Do not move a private notebook into the public directory until its code and outputs contain no local paths, filenames, or other private data.
+
+The private local-catalog notebook loads `ARCHIVER_NOTEBOOK_SOURCE` from the repository-root `.env` file. It creates or opens its catalog at `.archiver/catalog.sqlite` within that source directory. Create the ignored local settings file from the tracked template, then edit the value:
+
+```powershell
+Copy-Item .env.example .env
+# Set ARCHIVER_NOTEBOOK_SOURCE=<directory-to-explore> in .env
+uv run jupyter lab notebooks/private
+```
+
+Never commit `.env`; it is intentionally ignored. `.env.example` documents the required variable without containing a local path.
+
+`nbstripout` removes notebook outputs and execution counts from the version stored by Git. After cloning, install the repository-local Git filter once:
+
+```powershell
+uv sync
+uv run nbstripout --install --attributes .gitattributes
+```
+
+Before committing a public notebook, strip and verify it, then review the staged change:
+
+```powershell
+uv run nbstripout notebooks/public/plan-001-catalog-tour.ipynb
+uv run nbstripout --verify notebooks/public/plan-001-catalog-tour.ipynb
+git add .gitattributes notebooks/public/plan-001-catalog-tour.ipynb
+git diff --cached
+git commit -m "Update public catalog tutorial"
+```
+
+The shared `.gitattributes` records which files use the filter, but Git intentionally requires each clone to install the filter locally. See the [nbstripout documentation](https://github.com/kynan/nbstripout/blob/main/README.md) for details.
+
 ### Catalog CLI
 
 CLI for the archiver (explore on the shell)
