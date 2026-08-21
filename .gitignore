@@ -30,6 +30,17 @@ dist/
 *.db
 *.db-*
 
+# Local secrets and certificates
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*
+secrets*
+
 # Editors and operating systems
 .vscode/
 .idea/
