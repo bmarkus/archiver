@@ -7,13 +7,15 @@ from collections.abc import Callable, Collection, Iterator
 from contextlib import suppress
 from pathlib import Path, PurePosixPath
 from time import monotonic, time_ns
+from typing import cast
 from uuid import uuid4
 
-from .errors import InvalidCatalogError, RefreshFailure, ScanFailure, StaleRefreshError
+from .errors import InvalidCatalogError, RefreshFailure, ScanFailure, StaleRefreshError, TaggingError
 from .filesystem import regular_files
 from .hashing import hash_file_stably
 from .models import (
     ContentId,
+    ContentTagAssertion,
     CurrentFileSearch,
     CurrentFileSort,
     DuplicateGroupSearch,
@@ -28,9 +30,14 @@ from .models import (
     ScanProgress,
     ScanRun,
     ScanSummary,
+    TaggedContent,
+    TaggedContentSearch,
+    TagProvenance,
+    TagProvenanceKind,
+    validate_tag_name,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE catalog_metadata (
@@ -68,7 +75,81 @@ CREATE TABLE file_observations (
 );
 CREATE INDEX file_observations_scan_path ON file_observations (scan_id, relative_path);
 CREATE INDEX file_observations_content ON file_observations (content_id);
+CREATE TABLE tags (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+CREATE TABLE content_tag_assertions (
+    id INTEGER PRIMARY KEY,
+    content_id INTEGER NOT NULL REFERENCES content(id),
+    tag_id INTEGER NOT NULL REFERENCES tags(id),
+    provenance_kind TEXT NOT NULL CHECK (provenance_kind IN ('user', 'system')),
+    source_name TEXT NOT NULL CHECK (length(source_name) > 0),
+    source_version TEXT NOT NULL CHECK (length(source_version) > 0),
+    source_detail TEXT NOT NULL DEFAULT '',
+    asserted_at_ns INTEGER NOT NULL,
+    retracted_at_ns INTEGER,
+    CHECK (retracted_at_ns IS NULL OR retracted_at_ns >= asserted_at_ns)
+);
+CREATE UNIQUE INDEX content_tag_assertions_active_source
+ON content_tag_assertions (
+    content_id, tag_id, provenance_kind, source_name, source_version, source_detail
+)
+WHERE retracted_at_ns IS NULL;
+CREATE INDEX content_tag_assertions_content_active
+ON content_tag_assertions (content_id, tag_id)
+WHERE retracted_at_ns IS NULL;
+CREATE INDEX content_tag_assertions_tag_active
+ON content_tag_assertions (tag_id, content_id)
+WHERE retracted_at_ns IS NULL;
 """
+
+_TAG_SCHEMA_STATEMENTS = (
+    "CREATE TABLE tags (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE)",
+    """
+    CREATE TABLE content_tag_assertions (
+        id INTEGER PRIMARY KEY,
+        content_id INTEGER NOT NULL REFERENCES content(id),
+        tag_id INTEGER NOT NULL REFERENCES tags(id),
+        provenance_kind TEXT NOT NULL CHECK (provenance_kind IN ('user', 'system')),
+        source_name TEXT NOT NULL CHECK (length(source_name) > 0),
+        source_version TEXT NOT NULL CHECK (length(source_version) > 0),
+        source_detail TEXT NOT NULL DEFAULT '',
+        asserted_at_ns INTEGER NOT NULL,
+        retracted_at_ns INTEGER,
+        CHECK (retracted_at_ns IS NULL OR retracted_at_ns >= asserted_at_ns)
+    )
+    """,
+    """
+    CREATE UNIQUE INDEX content_tag_assertions_active_source
+    ON content_tag_assertions (
+        content_id, tag_id, provenance_kind, source_name, source_version, source_detail
+    )
+    WHERE retracted_at_ns IS NULL
+    """,
+    """
+    CREATE INDEX content_tag_assertions_content_active
+    ON content_tag_assertions (content_id, tag_id)
+    WHERE retracted_at_ns IS NULL
+    """,
+    """
+    CREATE INDEX content_tag_assertions_tag_active
+    ON content_tag_assertions (tag_id, content_id)
+    WHERE retracted_at_ns IS NULL
+    """,
+)
+
+_BASE_SCHEMA_TABLES = frozenset({"catalog_metadata", "locations", "content", "scan_runs", "file_observations"})
+_TAG_SCHEMA_TABLES = frozenset({"tags", "content_tag_assertions"})
+
+
+def _validate_schema_tables(connection: sqlite3.Connection, version: int) -> None:
+    rows = connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    actual = {str(row[0]) for row in rows}
+    required = _BASE_SCHEMA_TABLES | (_TAG_SCHEMA_TABLES if version == SCHEMA_VERSION else frozenset())
+    missing = sorted(required - actual)
+    if missing:
+        raise InvalidCatalogError(f"catalog schema is missing required tables: {', '.join(missing)}")
 
 
 class Catalog:
@@ -82,7 +163,7 @@ class Catalog:
 
     @classmethod
     def create(cls, database_path: Path) -> Catalog:
-        """Create a new schema-version-1 catalog at an unused path."""
+        """Create a new schema-version-2 catalog at an unused path."""
         path = database_path.resolve(strict=False)
         if path.exists():
             raise InvalidCatalogError(f"catalog database already exists: {path}")
@@ -102,6 +183,52 @@ class Catalog:
         return cls(path, connection)
 
     @classmethod
+    def migrate(cls, database_path: Path) -> bool:
+        """Explicitly migrate a schema-version-1 catalog to version 2.
+
+        Return ``True`` when a migration was applied and ``False`` when the
+        catalog was already current.
+        """
+        path = database_path.resolve(strict=False)
+        if not path.is_file():
+            raise InvalidCatalogError(f"catalog database does not exist: {path}")
+        try:
+            connection = sqlite3.connect(path)
+            connection.execute("PRAGMA foreign_keys = ON")
+            row = connection.execute(
+                "SELECT catalog_uuid, schema_version FROM catalog_metadata WHERE singleton = 1"
+            ).fetchone()
+            if row is None:
+                raise InvalidCatalogError("catalog metadata is missing")
+            version = row[1]
+            if version == SCHEMA_VERSION:
+                _validate_schema_tables(connection, SCHEMA_VERSION)
+                connection.close()
+                return False
+            if version != 1:
+                raise InvalidCatalogError(
+                    f"unsupported catalog schema version: {version} (expected 1 or {SCHEMA_VERSION})"
+                )
+            _validate_schema_tables(connection, 1)
+            with connection:
+                for statement in _TAG_SCHEMA_STATEMENTS:
+                    connection.execute(statement)
+                connection.execute(
+                    "UPDATE catalog_metadata SET schema_version = ? WHERE singleton = 1",
+                    (SCHEMA_VERSION,),
+                )
+                _validate_schema_tables(connection, SCHEMA_VERSION)
+        except sqlite3.Error as error:
+            with suppress(UnboundLocalError):
+                connection.close()
+            raise InvalidCatalogError(f"could not migrate catalog: {path}") from error
+        except InvalidCatalogError:
+            connection.close()
+            raise
+        connection.close()
+        return True
+
+    @classmethod
     def open(cls, database_path: Path) -> Catalog:
         """Open an existing catalog after validating its schema version."""
         path = database_path.resolve(strict=False)
@@ -115,8 +242,14 @@ class Catalog:
             ).fetchone()
             if row is None:
                 raise InvalidCatalogError("catalog metadata is missing")
-            if row[1] != SCHEMA_VERSION:
-                raise InvalidCatalogError(f"unsupported catalog schema version: {row[1]} (expected {SCHEMA_VERSION})")
+            version = row[1]
+            if version == 1:
+                raise InvalidCatalogError(
+                    "catalog schema version 1 requires migration; run 'archiver catalog migrate ROOT'"
+                )
+            if version != SCHEMA_VERSION:
+                raise InvalidCatalogError(f"unsupported catalog schema version: {version} (expected {SCHEMA_VERSION})")
+            _validate_schema_tables(connection, SCHEMA_VERSION)
         except sqlite3.Error as error:
             with suppress(UnboundLocalError):
                 connection.close()
@@ -274,6 +407,221 @@ class Catalog:
                 raise
             raise RefreshFailure(f"could not apply refresh for {change_set.location.root}") from error
         return self._scan_summary(scan_id)
+
+    def add_content_tag(self, content_id: ContentId, tag: str, provenance: TagProvenance) -> bool:
+        """Add one active assertion, returning whether catalog state changed."""
+        canonical_tag = validate_tag_name(tag)
+        content_row_id, _ = self._content_record(content_id)
+        with self._connection:
+            self._connection.execute(
+                "INSERT INTO tags (name) VALUES (?) ON CONFLICT (name) DO NOTHING", (canonical_tag,)
+            )
+            tag_row = self._connection.execute("SELECT id FROM tags WHERE name = ?", (canonical_tag,)).fetchone()
+            assert tag_row is not None
+            cursor = self._connection.execute(
+                """
+                INSERT OR IGNORE INTO content_tag_assertions (
+                    content_id, tag_id, provenance_kind, source_name, source_version,
+                    source_detail, asserted_at_ns, retracted_at_ns
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+                """,
+                (
+                    content_row_id,
+                    int(tag_row["id"]),
+                    provenance.kind,
+                    provenance.source_name,
+                    provenance.source_version,
+                    provenance.source_detail,
+                    time_ns(),
+                ),
+            )
+        return cursor.rowcount == 1
+
+    def add_tag_for_path(
+        self,
+        root: Path,
+        relative_path: PurePosixPath,
+        tag: str,
+        provenance: TagProvenance,
+    ) -> bool:
+        """Resolve a current path and add a tag assertion to its content."""
+        return self.add_content_tag(self._content_for_current_path(root, relative_path), tag, provenance)
+
+    def retract_content_tag(
+        self,
+        content_id: ContentId,
+        tag: str,
+        provenance: TagProvenance | None = None,
+    ) -> int:
+        """Retract an exact provenance, or every active user assertion when omitted."""
+        canonical_tag = validate_tag_name(tag)
+        content_row_id, _ = self._content_record(content_id)
+        parameters: list[object] = [time_ns(), content_row_id, canonical_tag]
+        provenance_clause = "AND assertions.provenance_kind = 'user'"
+        if provenance is not None:
+            provenance_clause = """
+                AND assertions.provenance_kind = ?
+                AND assertions.source_name = ?
+                AND assertions.source_version = ?
+                AND assertions.source_detail = ?
+            """
+            parameters.extend(
+                (
+                    provenance.kind,
+                    provenance.source_name,
+                    provenance.source_version,
+                    provenance.source_detail,
+                )
+            )
+        with self._connection:
+            cursor = self._connection.execute(
+                f"""
+                UPDATE content_tag_assertions AS assertions
+                SET retracted_at_ns = ?
+                WHERE assertions.content_id = ?
+                  AND assertions.tag_id = (SELECT id FROM tags WHERE name = ?)
+                  AND assertions.retracted_at_ns IS NULL
+                  {provenance_clause}
+                """,
+                parameters,
+            )
+        return cursor.rowcount
+
+    def retract_user_tag_for_path(self, root: Path, relative_path: PurePosixPath, tag: str) -> int:
+        """Retract all active user assertions for a current path's content."""
+        return self.retract_content_tag(self._content_for_current_path(root, relative_path), tag)
+
+    def tags_for_content(self, content_id: ContentId) -> tuple[ContentTagAssertion, ...]:
+        """Return active assertions for known content in deterministic order."""
+        content_row_id, _ = self._content_record(content_id)
+        rows = self._connection.execute(
+            """
+            SELECT
+                tags.name AS tag_name,
+                assertions.provenance_kind AS provenance_kind,
+                assertions.source_name AS source_name,
+                assertions.source_version AS source_version,
+                assertions.source_detail AS source_detail,
+                assertions.asserted_at_ns AS asserted_at_ns
+            FROM content_tag_assertions AS assertions
+            JOIN tags ON tags.id = assertions.tag_id
+            WHERE assertions.content_id = ? AND assertions.retracted_at_ns IS NULL
+            ORDER BY
+                tags.name,
+                assertions.provenance_kind,
+                assertions.source_name,
+                assertions.source_version,
+                assertions.source_detail,
+                assertions.asserted_at_ns
+            """,
+            (content_row_id,),
+        )
+        return tuple(self._tag_assertion_from_row(row, content_id) for row in rows)
+
+    def content_for_path(self, root: Path, relative_path: PurePosixPath) -> ContentId:
+        """Resolve a current relative path to its content identity."""
+        return self._content_for_current_path(root, relative_path)
+
+    def tags_for_path(self, root: Path, relative_path: PurePosixPath) -> tuple[ContentTagAssertion, ...]:
+        """Return active content tags resolved through a current relative path."""
+        return self.tags_for_content(self._content_for_current_path(root, relative_path))
+
+    def search_tagged_content(
+        self,
+        tag: str,
+        *,
+        provenance: TagProvenanceKind | None = None,
+        limit: int = 20,
+    ) -> TaggedContentSearch:
+        """Return bounded content identities with one active tag assertion."""
+        canonical_tag = validate_tag_name(tag)
+        if provenance not in (None, "user", "system"):
+            raise ValueError("provenance must be 'user', 'system', or None")
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+        provenance_clause = "" if provenance is None else "AND assertions.provenance_kind = ?"
+        parameters: list[object] = [canonical_tag]
+        if provenance is not None:
+            parameters.append(provenance)
+        count_row = self._connection.execute(
+            f"""
+            SELECT COUNT(DISTINCT assertions.content_id) AS total_matches
+            FROM content_tag_assertions AS assertions
+            JOIN tags ON tags.id = assertions.tag_id
+            WHERE tags.name = ? AND assertions.retracted_at_ns IS NULL {provenance_clause}
+            """,
+            parameters,
+        ).fetchone()
+        assert count_row is not None
+        content_rows = tuple(
+            self._connection.execute(
+                f"""
+                SELECT DISTINCT
+                    content.id AS content_row_id,
+                    content.algorithm AS algorithm,
+                    content.digest AS digest,
+                    content.size_bytes AS size_bytes
+                FROM content
+                JOIN content_tag_assertions AS assertions ON assertions.content_id = content.id
+                JOIN tags ON tags.id = assertions.tag_id
+                WHERE tags.name = ? AND assertions.retracted_at_ns IS NULL {provenance_clause}
+                ORDER BY content.algorithm, content.digest
+                LIMIT ?
+                """,
+                (*parameters, limit),
+            )
+        )
+        if not content_rows:
+            return TaggedContentSearch(contents=(), total_matches=int(count_row["total_matches"]))
+        content_ids = {
+            int(row["content_row_id"]): ContentId(algorithm=str(row["algorithm"]), digest=str(row["digest"]))
+            for row in content_rows
+        }
+        placeholders = ", ".join("?" for _ in content_rows)
+        assertion_parameters: list[object] = [canonical_tag, *content_ids]
+        assertion_provenance_clause = ""
+        if provenance is not None:
+            assertion_provenance_clause = "AND assertions.provenance_kind = ?"
+            assertion_parameters.append(provenance)
+        assertion_rows = self._connection.execute(
+            f"""
+            SELECT
+                assertions.content_id AS content_row_id,
+                tags.name AS tag_name,
+                assertions.provenance_kind AS provenance_kind,
+                assertions.source_name AS source_name,
+                assertions.source_version AS source_version,
+                assertions.source_detail AS source_detail,
+                assertions.asserted_at_ns AS asserted_at_ns
+            FROM content_tag_assertions AS assertions
+            JOIN tags ON tags.id = assertions.tag_id
+            WHERE tags.name = ?
+              AND assertions.content_id IN ({placeholders})
+              AND assertions.retracted_at_ns IS NULL
+              {assertion_provenance_clause}
+            ORDER BY
+                assertions.content_id,
+                assertions.provenance_kind,
+                assertions.source_name,
+                assertions.source_version,
+                assertions.source_detail,
+                assertions.asserted_at_ns
+            """,
+            assertion_parameters,
+        )
+        assertions_by_content: dict[int, list[ContentTagAssertion]] = {row_id: [] for row_id in content_ids}
+        for row in assertion_rows:
+            row_id = int(row["content_row_id"])
+            assertions_by_content[row_id].append(self._tag_assertion_from_row(row, content_ids[row_id]))
+        contents = tuple(
+            TaggedContent(
+                content_id=content_ids[int(row["content_row_id"])],
+                size_bytes=int(row["size_bytes"]),
+                assertions=tuple(assertions_by_content[int(row["content_row_id"])]),
+            )
+            for row in content_rows
+        )
+        return TaggedContentSearch(contents=contents, total_matches=int(count_row["total_matches"]))
 
     def current_files(self, root: Path) -> list[FileObservation]:
         """Return the current files for one location in relative-path order."""
@@ -547,6 +895,58 @@ class Catalog:
         yield from self._historical_observations_for_query(
             "ORDER BY locations.root_path, scans.id, observations.relative_path",
             (),
+        )
+
+    def _content_record(self, content_id: ContentId) -> tuple[int, int]:
+        row = self._connection.execute(
+            "SELECT id, size_bytes FROM content WHERE algorithm = ? AND digest = ?",
+            (content_id.algorithm, content_id.digest),
+        ).fetchone()
+        if row is None:
+            raise TaggingError(f"content is not known to this catalog: {content_id.algorithm}:{content_id.digest}")
+        return int(row["id"]), int(row["size_bytes"])
+
+    def _content_for_current_path(self, root: Path, relative_path: PurePosixPath) -> ContentId:
+        canonical_path = self._validated_relative_path(relative_path)
+        location = self._location_for_root(root)
+        if location is None:
+            raise TaggingError(f"catalog has no current path: {canonical_path.as_posix()}")
+        row = self._connection.execute(
+            """
+            SELECT content.algorithm AS algorithm, content.digest AS digest
+            FROM file_observations AS observations
+            JOIN scan_runs AS scans ON scans.id = observations.scan_id
+            JOIN locations ON locations.id = scans.location_id
+            JOIN content ON content.id = observations.content_id
+            WHERE locations.id = ?
+              AND scans.id = locations.current_scan_id
+              AND observations.relative_path = ?
+            """,
+            (location.id, canonical_path.as_posix()),
+        ).fetchone()
+        if row is None:
+            raise TaggingError(f"catalog has no current path: {canonical_path.as_posix()}")
+        return ContentId(algorithm=str(row["algorithm"]), digest=str(row["digest"]))
+
+    @staticmethod
+    def _validated_relative_path(relative_path: PurePosixPath) -> PurePosixPath:
+        text = relative_path.as_posix()
+        if relative_path.is_absolute() or text in ("", ".") or ".." in relative_path.parts or "\\" in text:
+            raise ValueError("tag path must be a non-empty POSIX relative path without parent traversal")
+        return relative_path
+
+    @staticmethod
+    def _tag_assertion_from_row(row: sqlite3.Row, content_id: ContentId) -> ContentTagAssertion:
+        return ContentTagAssertion(
+            content_id=content_id,
+            tag=str(row["tag_name"]),
+            provenance=TagProvenance(
+                kind=cast(TagProvenanceKind, str(row["provenance_kind"])),
+                source_name=str(row["source_name"]),
+                source_version=str(row["source_version"]),
+                source_detail=str(row["source_detail"]),
+            ),
+            asserted_at_ns=int(row["asserted_at_ns"]),
         )
 
     @staticmethod

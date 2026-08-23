@@ -96,11 +96,13 @@ Policy decisions about whether to keep, move, link, or remove duplicate physical
 
 Metadata may come from multiple sources and at different times.
 
-A **tag assertion** should eventually be modeled as historical/provenanced information rather than as a single destructively overwritten value.
+A **tag assertion** describes content identity, never an individual pathname. Applying a tag through a path first resolves the observed content, so every file instance of those bytes shares the assertion. Assertions remain catalog metadata when paths disappear.
 
-When catalogs are merged, conflicting or repeated tag assertions should be preservable. An effective/current tag view may be derived by policy, but historical assertions must not be silently discarded.
+Tag assertions are historical and provenance-aware rather than destructively overwritten values. Provenance distinguishes user and system assertions and identifies the producing source or tool, including its version and any stable method or configuration identifier needed to interpret the result. Results from different tools or tool versions must remain distinguishable.
 
-Tagging is outside Plan 001, but the catalog foundation must not make this future model impossible.
+Retraction changes whether an assertion is current without erasing its origin. When catalogs are merged, conflicting or repeated assertions should be preservable. An effective/current tag view may be derived by later policy, but historical assertions and provenance must not be silently discarded.
+
+Tagging is outside Plan 001. Plan 003.2 introduces current tag operations and lightweight assertion/retraction persistence; full tag-history queries, merge policy, and conflict resolution remain later work.
 
 ## 9. Ingest
 

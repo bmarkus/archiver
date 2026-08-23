@@ -7,12 +7,15 @@ import shutil
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from pathlib import Path
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path, PurePosixPath
 from typing import TextIO
 
-from .catalog import Catalog
-from .errors import InvalidCatalogError, ScanFailure
+from .catalog import SCHEMA_VERSION, Catalog
+from .errors import InvalidCatalogError, ScanFailure, TaggingError
 from .models import (
+    ContentId,
+    ContentTagAssertion,
     CurrentFileSort,
     DuplicateGroupSearch,
     DuplicateGroupView,
@@ -24,6 +27,9 @@ from .models import (
     ScanProgress,
     ScanRun,
     ScanSummary,
+    TaggedContentSearch,
+    TagProvenance,
+    validate_tag_name,
 )
 
 _CONTROL_DIRECTORY_NAME = ".archiver"
@@ -38,6 +44,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if arguments.catalog_command == "init":
             _initialize_catalog(arguments.root)
+        elif arguments.catalog_command == "migrate":
+            _migrate_catalog(arguments.root)
+        elif arguments.catalog_command == "tags":
+            _handle_tags(arguments)
         elif arguments.catalog_command == "info":
             _show_catalog_info(arguments.root)
         elif arguments.catalog_command in ("refresh", "scan"):
@@ -65,7 +75,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         else:
             parser.error("a catalog command is required")
-    except (InvalidCatalogError, ScanFailure, OSError) as error:
+    except (InvalidCatalogError, ScanFailure, TaggingError, OSError) as error:
         print(f"archiver: {error}", file=sys.stderr)
         return 1
     return 0
@@ -79,6 +89,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     for command, help_text in (
         ("init", "create a catalog without scanning"),
+        ("migrate", "explicitly migrate an older catalog schema"),
         ("info", "show catalog and current-scan information"),
         ("refresh", "reconcile and atomically refresh the catalog root"),
         ("scan", "compatibility alias for refresh"),
@@ -140,6 +151,27 @@ def _build_parser() -> argparse.ArgumentParser:
             )
             subparser.add_argument("--reverse", action="store_true", help="invert the selected sort direction")
 
+    tags_parser = catalog_commands.add_parser("tags", help="add, remove, and query content tags")
+    tag_commands = tags_parser.add_subparsers(dest="tag_command", required=True)
+    for command, help_text in (
+        ("add", "add a user tag to content"),
+        ("remove", "remove active user tag assertions"),
+        ("list", "list active assertions for content"),
+    ):
+        subparser = tag_commands.add_parser(command, help=help_text)
+        subparser.add_argument("root", type=Path, metavar="ROOT")
+        if command != "list":
+            subparser.add_argument("tag", type=_tag_name, metavar="TAG")
+        target = subparser.add_mutually_exclusive_group(required=True)
+        target.add_argument("--path", dest="relative_path", type=_relative_path, metavar="PATH")
+        target.add_argument("--content", dest="content_id", type=_content_id, metavar="SHA256")
+
+    find_parser = tag_commands.add_parser("find", help="find bounded content identities by tag")
+    find_parser.add_argument("root", type=Path, metavar="ROOT")
+    find_parser.add_argument("tag", type=_tag_name, metavar="TAG")
+    find_parser.add_argument("--provenance", choices=("user", "system"))
+    find_parser.add_argument("--limit", type=_positive_int, default=20, metavar="N")
+
     return parser
 
 
@@ -157,6 +189,96 @@ def _initialize_catalog(root_argument: Path) -> None:
         print(f"Root: {root}")
         print(f"Database: {catalog.database_path}")
         print(f"Catalog UUID: {catalog.catalog_uuid}")
+
+
+def _migrate_catalog(root_argument: Path) -> None:
+    root, database_path = _catalog_paths(root_argument)
+    changed = Catalog.migrate(database_path)
+    print("Catalog migrated" if changed else "Catalog already current")
+    print(f"Root: {root}")
+    print(f"Schema version: {SCHEMA_VERSION}")
+
+
+def _handle_tags(arguments: argparse.Namespace) -> None:
+    root, database_path = _catalog_paths(arguments.root)
+    if arguments.tag_command == "find":
+        with Catalog.open(database_path) as catalog:
+            result = catalog.search_tagged_content(
+                arguments.tag,
+                provenance=arguments.provenance,
+                limit=arguments.limit,
+            )
+        _print_tag_search(arguments.tag, arguments.provenance, result)
+        return
+
+    provenance = _cli_tag_provenance()
+    with Catalog.open(database_path) as catalog:
+        if arguments.tag_command == "add":
+            if arguments.content_id is not None:
+                changed = catalog.add_content_tag(arguments.content_id, arguments.tag, provenance)
+            else:
+                changed = catalog.add_tag_for_path(root, arguments.relative_path, arguments.tag, provenance)
+            print("Tag added" if changed else "Tag already active; no catalog change was needed.")
+            print(f"Tag: {arguments.tag}")
+            return
+        if arguments.tag_command == "remove":
+            if arguments.content_id is not None:
+                retracted = catalog.retract_content_tag(arguments.content_id, arguments.tag)
+            else:
+                retracted = catalog.retract_user_tag_for_path(root, arguments.relative_path, arguments.tag)
+            if retracted:
+                print(f"Tag removed ({retracted} user assertion{'s' if retracted != 1 else ''} retracted)")
+            else:
+                print("Tag was not active; no catalog change was needed.")
+            print(f"Tag: {arguments.tag}")
+            return
+        if arguments.tag_command == "list":
+            if arguments.content_id is not None:
+                assertions = catalog.tags_for_content(arguments.content_id)
+                content_id = arguments.content_id
+            else:
+                assertions = catalog.tags_for_path(root, arguments.relative_path)
+                content_id = (
+                    assertions[0].content_id if assertions else catalog.content_for_path(root, arguments.relative_path)
+                )
+            _print_tag_assertions(content_id, assertions)
+            return
+    raise AssertionError(f"unsupported tag command: {arguments.tag_command}")
+
+
+def _cli_tag_provenance() -> TagProvenance:
+    try:
+        source_version = version("archiver")
+    except PackageNotFoundError:
+        source_version = "0.1.0"
+    return TagProvenance(kind="user", source_name="archiver-cli", source_version=source_version)
+
+
+def _print_tag_assertions(content_id: ContentId, assertions: tuple[ContentTagAssertion, ...]) -> None:
+    print("Content tags")
+    print(f"SHA-256: {content_id.digest}")
+    if not assertions:
+        print("No active tags.")
+        return
+    for assertion in assertions:
+        provenance = assertion.provenance
+        detail = f" [{provenance.source_detail}]" if provenance.source_detail else ""
+        print(f"{assertion.tag}  {provenance.kind}  {provenance.source_name}@{provenance.source_version}{detail}")
+
+
+def _print_tag_search(tag: str, provenance: str | None, result: TaggedContentSearch) -> None:
+    print("Tagged content")
+    print(f"Tag: {tag}")
+    print(f"Provenance: {provenance or 'all'}")
+    print(f"Matched content: {result.total_matches}")
+    for content in result.contents:
+        print(f"{content.content_id.digest}  {_format_byte_count(content.size_bytes)}")
+        for assertion in content.assertions:
+            source = assertion.provenance
+            detail = f" [{source.source_detail}]" if source.source_detail else ""
+            print(f"  {source.kind}  {source.source_name}@{source.source_version}{detail}")
+    qualifier = "all" if len(result.contents) == result.total_matches else "first"
+    print(f"Showing {qualifier} {len(result.contents)} of {result.total_matches} content identities.")
 
 
 def _show_catalog_info(root_argument: Path) -> None:
@@ -315,6 +437,27 @@ def _sort_direction(sort_by: CurrentFileSort, reverse: bool) -> str:
 def _catalog_paths(root_argument: Path) -> tuple[Path, Path]:
     root = _canonical_root(root_argument)
     return root, root / _CONTROL_DIRECTORY_NAME / _DATABASE_FILE_NAME
+
+
+def _tag_name(value: str) -> str:
+    try:
+        return validate_tag_name(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
+def _content_id(value: str) -> ContentId:
+    try:
+        return ContentId(algorithm="sha256", digest=value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
+def _relative_path(value: str) -> PurePosixPath:
+    path = PurePosixPath(value)
+    if path.is_absolute() or path.as_posix() in ("", ".") or ".." in path.parts or "\\" in value:
+        raise argparse.ArgumentTypeError("must be a non-empty POSIX relative path without parent traversal")
+    return path
 
 
 def _positive_int(value: str) -> int:

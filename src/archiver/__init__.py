@@ -1,9 +1,10 @@
 """Content-oriented file cataloging."""
 
 from .catalog import Catalog
-from .errors import InvalidCatalogError, RefreshFailure, ScanFailure, StaleRefreshError
+from .errors import InvalidCatalogError, RefreshFailure, ScanFailure, StaleRefreshError, TaggingError
 from .models import (
     ContentId,
+    ContentTagAssertion,
     CurrentFileSearch,
     CurrentFileSort,
     DuplicateGroupSearch,
@@ -19,11 +20,17 @@ from .models import (
     ScanProgress,
     ScanRun,
     ScanSummary,
+    TaggedContent,
+    TaggedContentSearch,
+    TagProvenance,
+    TagProvenanceKind,
+    validate_tag_name,
 )
 
 __all__ = [
     "Catalog",
     "ContentId",
+    "ContentTagAssertion",
     "CurrentFileSearch",
     "CurrentFileSort",
     "DuplicateGroupSearch",
@@ -43,4 +50,10 @@ __all__ = [
     "ScanProgress",
     "ScanRun",
     "ScanSummary",
+    "TaggedContent",
+    "TaggedContentSearch",
+    "TaggingError",
+    "TagProvenance",
+    "TagProvenanceKind",
+    "validate_tag_name",
 ]

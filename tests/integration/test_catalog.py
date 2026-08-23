@@ -15,7 +15,7 @@ def test_create_close_and_reopen_preserves_catalog_metadata(tmp_path: Path) -> N
 
     reopened = Catalog.open(database_path)
     assert reopened.catalog_uuid == catalog_uuid
-    assert reopened.schema_version == 1
+    assert reopened.schema_version == 2
     reopened.close()
 
 

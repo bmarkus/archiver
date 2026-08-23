@@ -1,5 +1,6 @@
 """Explicit domain types for catalog data."""
 
+import re
 import string
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -7,6 +8,16 @@ from typing import Literal, TypeAlias
 
 CurrentFileSort: TypeAlias = Literal["path", "size", "date"]
 RefreshChangeKind: TypeAlias = Literal["new", "unchanged", "modified", "missing"]
+TagProvenanceKind: TypeAlias = Literal["user", "system"]
+
+_TAG_NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9._:-]{0,63}\Z")
+
+
+def validate_tag_name(name: str) -> str:
+    """Return a valid canonical tag name or raise ``ValueError``."""
+    if _TAG_NAME_PATTERN.fullmatch(name) is None:
+        raise ValueError("tag must match [a-z0-9][a-z0-9._:-]{0,63}")
+    return name
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +34,52 @@ class ContentId:
             raise ValueError("a SHA-256 digest must contain exactly 64 hexadecimal characters")
         if self.digest != self.digest.lower():
             raise ValueError("content digests must use lowercase hexadecimal")
+
+
+@dataclass(frozen=True, slots=True)
+class TagProvenance:
+    """The producer identity attached to one tag assertion."""
+
+    kind: TagProvenanceKind
+    source_name: str
+    source_version: str
+    source_detail: str = ""
+
+    def __post_init__(self) -> None:
+        if self.kind not in ("user", "system"):
+            raise ValueError("tag provenance kind must be 'user' or 'system'")
+        for field_name, value in (("source_name", self.source_name), ("source_version", self.source_version)):
+            if not value or value.strip() != value or any(character in "\r\n\0" for character in value):
+                raise ValueError(f"tag provenance {field_name} must be a non-empty single-line value")
+        if any(character in "\r\n\0" for character in self.source_detail):
+            raise ValueError("tag provenance source_detail must be a single-line value")
+
+
+@dataclass(frozen=True, slots=True)
+class ContentTagAssertion:
+    """One active provenance-aware tag assertion about content."""
+
+    content_id: ContentId
+    tag: str
+    provenance: TagProvenance
+    asserted_at_ns: int
+
+
+@dataclass(frozen=True, slots=True)
+class TaggedContent:
+    """One content identity returned by a reverse tag lookup."""
+
+    content_id: ContentId
+    size_bytes: int
+    assertions: tuple[ContentTagAssertion, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class TaggedContentSearch:
+    """Bounded tagged content together with its complete match count."""
+
+    contents: tuple[TaggedContent, ...]
+    total_matches: int
 
 
 @dataclass(frozen=True, slots=True)

@@ -12,7 +12,7 @@ Early development.
 
 The current implementation target is:
 
-**Plan 003.1 — Catalog Safety and Boundary Test Expansion**
+**Plan 003.2 — Content-Level Tags**
 
 This establishes the core catalog model:
 
@@ -22,10 +22,12 @@ This establishes the core catalog model:
 * scan history;
 * current-state queries;
 * duplicate-content discovery;
-* safe handling of failed scans.
+* safe handling of failed scans;
 * filesystem reconciliation and atomic refresh application;
+* bounded file and duplicate inspection;
+* provenance-aware content tags with explicit schema migration.
 
-Archive ingest, tagging, merge policy, destructive duplicate handling, and managed archive storage are intentionally out of scope for this first phase.
+Archive ingest, automatic tag classification, tag merge policy, destructive duplicate handling, and managed archive storage remain out of scope.
 
 ## Core ideas
 
@@ -57,7 +59,7 @@ A failed or interrupted scan must never replace the previous successful state.
 
 The design favors preserving historical information rather than silently overwriting it.
 
-This will later apply to tags and metadata when catalogs are merged or archives are ingested.
+Tag assertions now retain user/system provenance, producer name, producer version, and retraction history. Catalog merge policy and public historical-tag queries remain future work.
 
 ## Repository structure
 
@@ -156,16 +158,18 @@ CLI for the archiver (explore on the shell)
 
 ```powershell
 uv run archiver catalog -h
-usage: archiver catalog [-h] {init,info,refresh,scan,duplicates,files} ...
+usage: archiver catalog [-h] {init,migrate,info,refresh,scan,duplicates,files,tags} ...
 
 positional arguments:
-  {init,info,refresh,scan,duplicates,files}
+  {init,migrate,info,refresh,scan,duplicates,files,tags}
     init                create a catalog without scanning
+    migrate             explicitly migrate an older catalog schema
     info                show catalog and current-scan information
     refresh             reconcile and atomically refresh the catalog root
     scan                compatibility alias for refresh
     duplicates          show aggregate duplicate metrics
     files               browse bounded current-file results
+    tags                add, remove, and query content tags
 ```
 
 Preview reconciliation without changing the catalog:
@@ -178,6 +182,14 @@ Inspect duplicate groups with bounded member output:
 
 ```powershell
 uv run archiver catalog duplicates C:\path\to\root --details --group-limit 20 --member-limit 20
+```
+
+Manage content-level tags through a current path or SHA-256 digest:
+
+```powershell
+uv run archiver catalog tags add C:\path\to\root favorite --path photos/example.jpg
+uv run archiver catalog tags list C:\path\to\root --path photos/example.jpg
+uv run archiver catalog tags find C:\path\to\root favorite --limit 20
 ```
 The SQLite catalog is stored at `.archiver/catalog.sqlite` below the chosen root. The `.archiver` control directory is excluded from refreshes and scans.
 
@@ -233,7 +245,7 @@ Create and open catalogs, scan local directories, hash file content, persist obs
 Likely later stages include:
 
 * richer catalog queries;
-* tag and metadata history;
+* richer tag and metadata history and merge policy;
 * catalog comparison and merge;
 * archive-managed storage;
 * source-to-archive ingest;

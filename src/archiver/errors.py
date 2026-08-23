@@ -15,3 +15,7 @@ class RefreshFailure(ScanFailure):
 
 class StaleRefreshError(RefreshFailure):
     """Raised when a change set no longer matches the catalog-current baseline."""
+
+
+class TaggingError(Exception):
+    """Raised when a tag operation cannot resolve its catalog target."""

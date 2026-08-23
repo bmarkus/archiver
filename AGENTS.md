@@ -15,9 +15,9 @@ Read these files before implementation or architectural changes:
 3. The active plan under `docs/plans/`
 4. The applicable plan under `docs/bugfixes/` when correcting a behavior bug.
 
-For the first implementation increment, the active plan is:
+The active implementation plan is:
 
-- `docs/plans/001-catalog-foundation.md`
+- `docs/plans/003.2-content-level-tags.md`
 
 The domain model and invariants are authoritative. If an implementation plan appears to conflict with them, stop changing the design and report the conflict.
 
