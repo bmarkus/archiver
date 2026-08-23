@@ -149,3 +149,22 @@ class DuplicateSummary:
     duplicate_content_group_count: int
     duplicate_file_instance_count: int
     potential_redundant_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class DuplicateGroupView:
+    """One duplicate-content group with a bounded member projection."""
+
+    content_id: ContentId
+    size_bytes: int
+    file_instance_count: int
+    potential_redundant_bytes: int
+    members: tuple[FileObservation, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class DuplicateGroupSearch:
+    """Bounded duplicate groups together with complete aggregate metrics."""
+
+    groups: tuple[DuplicateGroupView, ...]
+    summary: DuplicateSummary

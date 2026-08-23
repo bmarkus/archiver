@@ -16,6 +16,8 @@ from .models import (
     ContentId,
     CurrentFileSearch,
     CurrentFileSort,
+    DuplicateGroupSearch,
+    DuplicateGroupView,
     DuplicateSummary,
     FileObservation,
     HistoricalObservation,
@@ -454,6 +456,66 @@ class Catalog:
             duplicate_file_instance_count=int(row["duplicate_file_instance_count"]),
             potential_redundant_bytes=int(row["potential_redundant_bytes"]),
         )
+
+    def search_duplicate_groups(
+        self,
+        root: Path,
+        *,
+        group_limit: int = 20,
+        member_limit: int = 20,
+    ) -> DuplicateGroupSearch:
+        """Return bounded duplicate groups and complete aggregate metrics."""
+        if group_limit < 1:
+            raise ValueError("group_limit must be at least 1")
+        if member_limit < 1:
+            raise ValueError("member_limit must be at least 1")
+        location = self._location_for_root(root)
+        if location is None:
+            return DuplicateGroupSearch(groups=(), summary=DuplicateSummary(0, 0, 0))
+        current_scan = self.current_scan(root)
+        if current_scan is None:
+            return DuplicateGroupSearch(groups=(), summary=DuplicateSummary(0, 0, 0))
+
+        summary = self.duplicate_summary(root)
+        group_rows = self._connection.execute(
+            """
+            SELECT
+                content.id AS content_database_id,
+                content.algorithm AS algorithm,
+                content.digest AS digest,
+                content.size_bytes AS size_bytes,
+                COUNT(*) AS file_instance_count,
+                (COUNT(*) - 1) * content.size_bytes AS potential_redundant_bytes
+            FROM file_observations AS observations
+            JOIN content ON content.id = observations.content_id
+            WHERE observations.scan_id = ?
+            GROUP BY content.id, content.algorithm, content.digest, content.size_bytes
+            HAVING COUNT(*) > 1
+            ORDER BY potential_redundant_bytes DESC, content.algorithm, content.digest
+            LIMIT ?
+            """,
+            (current_scan.id, group_limit),
+        ).fetchall()
+        groups = tuple(
+            DuplicateGroupView(
+                content_id=ContentId(algorithm=str(row["algorithm"]), digest=str(row["digest"])),
+                size_bytes=int(row["size_bytes"]),
+                file_instance_count=int(row["file_instance_count"]),
+                potential_redundant_bytes=int(row["potential_redundant_bytes"]),
+                members=tuple(
+                    self._observations_for_query(
+                        """
+                        WHERE scans.id = ? AND observations.content_id = ?
+                        ORDER BY observations.relative_path
+                        LIMIT ?
+                        """,
+                        (current_scan.id, int(row["content_database_id"]), member_limit),
+                    )
+                ),
+            )
+            for row in group_rows
+        )
+        return DuplicateGroupSearch(groups=groups, summary=summary)
 
     def scan_history(self) -> Iterator[ScanRun]:
         """Yield every scan run in deterministic location-root and scan-ID order.

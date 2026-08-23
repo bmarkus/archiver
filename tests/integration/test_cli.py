@@ -86,7 +86,7 @@ def test_catalog_scan_excludes_control_directory_and_preserves_source(
     assert main(["catalog", "scan", str(root)]) == 0
 
     output = capsys.readouterr().out
-    assert "Scan completed" in output
+    assert "Refresh completed" in output
     assert "Files observed: 1" in output
     assert "New files: 1" in output
     assert "Unchanged files: 0" in output
@@ -153,6 +153,72 @@ def test_failed_cli_scan_preserves_current_state(
         assert catalog.current_files(root)[0].content_id == expected_content
 
 
+def test_catalog_refresh_dry_run_is_write_free_and_renders_deterministic_details(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = tmp_path / "photos"
+    root.mkdir()
+    (root / "z-last.txt").write_bytes(b"last")
+    (root / "a-first.txt").write_bytes(b"first")
+
+    assert main(["catalog", "init", str(root)]) == 0
+    capsys.readouterr()
+    assert main(["catalog", "refresh", str(root), "--dry-run", "--details", "changes"]) == 0
+
+    output = capsys.readouterr().out
+    assert "Refresh preview" in output
+    assert "New files: 2" in output
+    assert "No catalog changes were written." in output
+    assert output.index("NEW       a-first.txt") < output.index("NEW       z-last.txt")
+    with Catalog.open(root / ".archiver" / "catalog.sqlite") as catalog:
+        assert catalog.current_scan(root) is None
+
+
+def test_catalog_refresh_applies_and_scan_remains_an_equivalent_alias(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    refresh_root = tmp_path / "refresh-root"
+    scan_root = tmp_path / "scan-root"
+    for root in (refresh_root, scan_root):
+        root.mkdir()
+        (root / "entry.txt").write_bytes(b"same")
+        assert main(["catalog", "init", str(root)]) == 0
+        capsys.readouterr()
+
+    assert main(["catalog", "refresh", str(refresh_root)]) == 0
+    refresh_output = capsys.readouterr().out
+    assert main(["catalog", "scan", str(scan_root)]) == 0
+    scan_output = capsys.readouterr().out
+
+    assert "Refresh completed" in refresh_output
+    assert "Refresh completed" in scan_output
+    with Catalog.open(refresh_root / ".archiver" / "catalog.sqlite") as refresh_catalog:
+        refresh_files = refresh_catalog.current_files(refresh_root)
+    with Catalog.open(scan_root / ".archiver" / "catalog.sqlite") as scan_catalog:
+        scan_files = scan_catalog.current_files(scan_root)
+    assert [(item.relative_path, item.content_id) for item in refresh_files] == [
+        (item.relative_path, item.content_id) for item in scan_files
+    ]
+
+
+def test_catalog_refresh_details_all_identifies_hash_reuse(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    root = tmp_path / "photos"
+    root.mkdir()
+    (root / "changed.txt").write_bytes(b"before")
+    (root / "stable.txt").write_bytes(b"stable")
+    assert main(["catalog", "init", str(root)]) == 0
+    capsys.readouterr()
+    assert main(["catalog", "refresh", str(root)]) == 0
+    capsys.readouterr()
+
+    (root / "changed.txt").write_bytes(b"after")
+    assert main(["catalog", "refresh", str(root), "--dry-run", "--details", "all"]) == 0
+
+    output = capsys.readouterr().out
+    assert "MODIFIED  changed.txt" in output
+    assert "UNCHANGED stable.txt (hash reused)" in output
+
+
 def test_invalid_cli_syntax_uses_argparse_exit_code() -> None:
     with pytest.raises(SystemExit) as error:
         main(["catalog", "unknown"])
@@ -180,7 +246,7 @@ def test_catalog_scan_renders_progress_only_to_interactive_stderr(
 
     assert "Scanned 1 files, 5 B" in terminal.getvalue()
     assert terminal.getvalue().endswith("\n")
-    assert "Scan completed" in capsys.readouterr().out
+    assert "Refresh completed" in capsys.readouterr().out
 
 
 def test_catalog_scan_no_progress_and_noninteractive_output_are_stable(
@@ -197,7 +263,7 @@ def test_catalog_scan_no_progress_and_noninteractive_output_are_stable(
     assert main(["catalog", "scan", str(root), "--no-progress"]) == 0
 
     assert terminal.getvalue() == ""
-    assert "Scan completed" in capsys.readouterr().out
+    assert "Refresh completed" in capsys.readouterr().out
 
     noninteractive = io.StringIO()
     monkeypatch.setattr("archiver.cli.sys.stderr", noninteractive)

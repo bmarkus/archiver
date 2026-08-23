@@ -12,7 +12,7 @@ Early development.
 
 The current implementation target is:
 
-**Plan 002 — Catalog Refresh and Reconciliation**
+**Plan 003.1 — Catalog Safety and Boundary Test Expansion**
 
 This establishes the core catalog model:
 
@@ -116,6 +116,7 @@ Public tutorials:
 
 * `notebooks/public/plan-001-catalog-tour.ipynb` — scanning, duplicate discovery, rename identity, and failed-scan safety.
 * `notebooks/public/catalog-refresh-and-reconciliation.ipynb` — dry-run reconciliation, atomic refresh application, stale-baseline protection, and equivalent CLI use.
+* `notebooks/public/plan-004-managed-operations-motivation.ipynb` — managed authority, reviewable quarantine planning, live precondition validation, and recoverable-operation motivation.
 
 
 Public tutorials live in `notebooks/public/` and use only temporary, synthetic data. Personal exploration belongs in `notebooks/private/`, which Git ignores. Do not move a private notebook into the public directory until its code and outputs contain no local paths, filenames, or other private data.
@@ -154,23 +155,32 @@ The shared `.gitattributes` records which files use the filter, but Git intentio
 CLI for the archiver (explore on the shell)
 
 ```powershell
-
 uv run archiver catalog -h
-usage: archiver catalog [-h] {init,info,scan,duplicates} ...
+usage: archiver catalog [-h] {init,info,refresh,scan,duplicates,files} ...
 
 positional arguments:
-  {init,info,scan,duplicates}
+  {init,info,refresh,scan,duplicates,files}
     init                create a catalog without scanning
     info                show catalog and current-scan information
-    scan                scan the catalog root
+    refresh             reconcile and atomically refresh the catalog root
+    scan                compatibility alias for refresh
     duplicates          show aggregate duplicate metrics
-
-options:
-  -h, --help            show this help message and exit
-
+    files               browse bounded current-file results
 ```
 
-The SQLite catalog is stored at `.archiver/catalog.sqlite` below the chosen root. The `.archiver` control directory is excluded from scans.
+Preview reconciliation without changing the catalog:
+
+```powershell
+uv run archiver catalog refresh C:\path\to\root --dry-run --details changes
+```
+
+Inspect duplicate groups with bounded member output:
+
+```powershell
+uv run archiver catalog duplicates C:\path\to\root --details --group-limit 20 --member-limit 20
+```
+The SQLite catalog is stored at `.archiver/catalog.sqlite` below the chosen root. The `.archiver` control directory is excluded from refreshes and scans.
+
 Run tests:
 
 ```bash
