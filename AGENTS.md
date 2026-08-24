@@ -17,7 +17,7 @@ Read these files before implementation or architectural changes:
 
 The active implementation plan is:
 
-- `docs/plans/003.2-content-level-tags.md`
+- `docs/plans/003.3-bounded-tag-and-file-search.md`
 
 The domain model and invariants are authoritative. If an implementation plan appears to conflict with them, stop changing the design and report the conflict.
 

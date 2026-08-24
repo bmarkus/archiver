@@ -16,7 +16,7 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 # Private notebooks and Jupyter checkpoints
-notebooks/private/
+notebooks/private/*
 notebooks/.ipynb_checkpoints/
 notebooks/**/.ipynb_checkpoints/
 
