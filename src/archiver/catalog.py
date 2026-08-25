@@ -16,6 +16,7 @@ from .hashing import hash_file_stably
 from .models import (
     ContentId,
     ContentTagAssertion,
+    ContentTagView,
     CurrentFileSearch,
     CurrentFileSort,
     DuplicateGroupSearch,
@@ -24,6 +25,7 @@ from .models import (
     FileObservation,
     HistoricalObservation,
     Location,
+    MultiTagContentSearch,
     RefreshChange,
     RefreshChangeKind,
     RefreshChangeSet,
@@ -32,6 +34,7 @@ from .models import (
     ScanSummary,
     TaggedContent,
     TaggedContentSearch,
+    TagMatchMode,
     TagProvenance,
     TagProvenanceKind,
     validate_tag_name,
@@ -622,6 +625,181 @@ class Catalog:
             for row in content_rows
         )
         return TaggedContentSearch(contents=contents, total_matches=int(count_row["total_matches"]))
+
+    def search_content_by_tags(
+        self,
+        root: Path,
+        tags: Collection[str],
+        *,
+        match: TagMatchMode = "all",
+        provenance: TagProvenanceKind | None = None,
+        limit: int = 20,
+        path_limit: int = 20,
+        tag_limit: int | None = 3,
+    ) -> MultiTagContentSearch:
+        """Return bounded content matching active tags with root-scoped path previews."""
+        canonical_tags = tuple(dict.fromkeys(validate_tag_name(tag) for tag in tags))
+        if not canonical_tags:
+            raise ValueError("at least one tag is required")
+        if match not in ("all", "any"):
+            raise ValueError("match must be 'all' or 'any'")
+        if provenance not in (None, "user", "system"):
+            raise ValueError("provenance must be 'user', 'system', or None")
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+        if path_limit < 1:
+            raise ValueError("path_limit must be at least 1")
+        if tag_limit is not None and tag_limit < 1:
+            raise ValueError("tag_limit must be at least 1 or None")
+
+        location = self._location_for_root(root)
+        location_id = None if location is None else location.id
+        tag_placeholders = ", ".join("?" for _ in canonical_tags)
+        provenance_clause = "" if provenance is None else "AND assertions.provenance_kind = ?"
+        matching_parameters: list[object] = list(canonical_tags)
+        if provenance is not None:
+            matching_parameters.append(provenance)
+        matching_parameters.append(len(canonical_tags) if match == "all" else 1)
+        matching_content_cte = f"""
+            matching_content AS (
+                SELECT assertions.content_id
+                FROM content_tag_assertions AS assertions
+                JOIN tags ON tags.id = assertions.tag_id
+                WHERE assertions.retracted_at_ns IS NULL
+                  AND tags.name IN ({tag_placeholders})
+                  {provenance_clause}
+                GROUP BY assertions.content_id
+                HAVING COUNT(DISTINCT tags.name) >= ?
+            )
+        """
+
+        total_row = self._connection.execute(
+            f"""
+            WITH {matching_content_cte}
+            SELECT
+                COUNT(DISTINCT matching_content.content_id) AS total_matches,
+                COUNT(observations.id) AS total_current_paths
+            FROM matching_content
+            LEFT JOIN locations ON locations.id = ?
+            LEFT JOIN file_observations AS observations
+              ON observations.scan_id = locations.current_scan_id
+             AND observations.content_id = matching_content.content_id
+            """,
+            (*matching_parameters, location_id),
+        ).fetchone()
+        assert total_row is not None
+
+        content_rows = tuple(
+            self._connection.execute(
+                f"""
+                WITH {matching_content_cte}
+                SELECT
+                    content.id AS content_row_id,
+                    content.algorithm AS algorithm,
+                    content.digest AS digest,
+                    content.size_bytes AS size_bytes
+                FROM matching_content
+                JOIN content ON content.id = matching_content.content_id
+                ORDER BY content.algorithm, content.digest
+                LIMIT ?
+                """,
+                (*matching_parameters, limit),
+            )
+        )
+        if not content_rows:
+            return MultiTagContentSearch(
+                contents=(),
+                total_matches=int(total_row["total_matches"]),
+                total_current_paths=int(total_row["total_current_paths"]),
+            )
+
+        content_ids = {
+            int(row["content_row_id"]): ContentId(algorithm=str(row["algorithm"]), digest=str(row["digest"]))
+            for row in content_rows
+        }
+        content_row_ids = tuple(content_ids)
+        content_placeholders = ", ".join("?" for _ in content_row_ids)
+        paths_by_content: dict[int, list[PurePosixPath]] = {row_id: [] for row_id in content_row_ids}
+        path_counts = {row_id: 0 for row_id in content_row_ids}
+        if location_id is not None:
+            path_rows = self._connection.execute(
+                f"""
+                WITH ranked_paths AS (
+                    SELECT
+                        observations.content_id AS content_row_id,
+                        observations.relative_path AS relative_path,
+                        COUNT(*) OVER (PARTITION BY observations.content_id) AS current_path_count,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY observations.content_id
+                            ORDER BY observations.relative_path
+                        ) AS path_rank
+                    FROM locations
+                    JOIN file_observations AS observations
+                      ON observations.scan_id = locations.current_scan_id
+                    WHERE locations.id = ?
+                      AND observations.content_id IN ({content_placeholders})
+                )
+                SELECT content_row_id, relative_path, current_path_count
+                FROM ranked_paths
+                WHERE path_rank <= ?
+                ORDER BY content_row_id, relative_path
+                """,
+                (location_id, *content_row_ids, path_limit),
+            )
+            for row in path_rows:
+                row_id = int(row["content_row_id"])
+                path_counts[row_id] = int(row["current_path_count"])
+                paths_by_content[row_id].append(PurePosixPath(str(row["relative_path"])))
+
+        tag_limit_clause = "" if tag_limit is None else "WHERE tag_rank <= ?"
+        tag_parameters: tuple[object, ...] = content_row_ids if tag_limit is None else (*content_row_ids, tag_limit)
+        tag_rows = self._connection.execute(
+            f"""
+            WITH distinct_active_tags AS (
+                SELECT DISTINCT assertions.content_id AS content_row_id, tags.name AS tag_name
+                FROM content_tag_assertions AS assertions
+                JOIN tags ON tags.id = assertions.tag_id
+                WHERE assertions.retracted_at_ns IS NULL
+                  AND assertions.content_id IN ({content_placeholders})
+            ),
+            ranked_tags AS (
+                SELECT
+                    content_row_id,
+                    tag_name,
+                    COUNT(*) OVER (PARTITION BY content_row_id) AS active_tag_count,
+                    ROW_NUMBER() OVER (PARTITION BY content_row_id ORDER BY tag_name) AS tag_rank
+                FROM distinct_active_tags
+            )
+            SELECT content_row_id, tag_name, active_tag_count
+            FROM ranked_tags
+            {tag_limit_clause}
+            ORDER BY content_row_id, tag_name
+            """,
+            tag_parameters,
+        )
+        tags_by_content: dict[int, list[str]] = {row_id: [] for row_id in content_row_ids}
+        tag_counts = {row_id: 0 for row_id in content_row_ids}
+        for row in tag_rows:
+            row_id = int(row["content_row_id"])
+            tag_counts[row_id] = int(row["active_tag_count"])
+            tags_by_content[row_id].append(str(row["tag_name"]))
+
+        contents = tuple(
+            ContentTagView(
+                content_id=content_ids[int(row["content_row_id"])],
+                size_bytes=int(row["size_bytes"]),
+                current_path_count=path_counts[int(row["content_row_id"])],
+                current_paths=tuple(paths_by_content[int(row["content_row_id"])]),
+                active_tag_count=tag_counts[int(row["content_row_id"])],
+                tags=tuple(tags_by_content[int(row["content_row_id"])]),
+            )
+            for row in content_rows
+        )
+        return MultiTagContentSearch(
+            contents=contents,
+            total_matches=int(total_row["total_matches"]),
+            total_current_paths=int(total_row["total_current_paths"]),
+        )
 
     def current_files(self, root: Path) -> list[FileObservation]:
         """Return the current files for one location in relative-path order."""

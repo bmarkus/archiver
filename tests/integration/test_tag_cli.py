@@ -45,8 +45,10 @@ def test_cli_add_list_find_and_remove_tags_by_path_and_digest(
 
     assert main(["catalog", "tags", "find", str(root), "favorite", "--provenance", "system"]) == 0
     output = capsys.readouterr().out
-    assert "Matched content: 1" in output
-    assert "system  classifier@2 [rules=v2]" in output
+    assert "Provenance: system" in output
+    assert "Matched: 1 content identity" in output
+    assert "2 current paths" in output
+    assert "favorite" in output
 
     assert main(["catalog", "tags", "remove", str(root), "favorite", "--content", content_id.digest]) == 0
     assert "1 user assertion retracted" in capsys.readouterr().out

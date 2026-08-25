@@ -119,6 +119,7 @@ Public tutorials:
 * `notebooks/public/plan-001-catalog-tour.ipynb` — scanning, duplicate discovery, rename identity, and failed-scan safety.
 * `notebooks/public/catalog-refresh-and-reconciliation.ipynb` — dry-run reconciliation, atomic refresh application, stale-baseline protection, and equivalent CLI use.
 * `notebooks/public/plan-003.2-content-level-tags.ipynb` — content-level tags, producer provenance, refresh survival, bounded queries, and CLI use.
+* `notebooks/public/plan-003.3a-multi-tag-content-search.ipynb` — bounded AND/OR content search, provenance filters, path/tag previews, orphaned content, and direct CLI use.
 * `notebooks/public/plan-004-managed-operations-motivation.ipynb` — managed authority, reviewable quarantine planning, live precondition validation, and recoverable-operation motivation.
 
 

@@ -17,7 +17,10 @@ Read these files before implementation or architectural changes:
 
 The active implementation plan is:
 
-- `docs/plans/003.3-bounded-tag-and-file-search.md`
+- `docs/plans/003.3a-bounded-tag-query-apis.md`
+
+`docs/plans/003.3-bounded-tag-and-file-search.md` is the umbrella design
+record for Plans 003.3a-003.3c, not a single implementation increment.
 
 The domain model and invariants are authoritative. If an implementation plan appears to conflict with them, stop changing the design and report the conflict.
 

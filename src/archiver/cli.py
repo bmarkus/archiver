@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path, PurePosixPath
+from textwrap import wrap
 from typing import TextIO
 
 from .catalog import SCHEMA_VERSION, Catalog
@@ -16,18 +17,20 @@ from .errors import InvalidCatalogError, ScanFailure, TaggingError
 from .models import (
     ContentId,
     ContentTagAssertion,
+    ContentTagView,
     CurrentFileSort,
     DuplicateGroupSearch,
     DuplicateGroupView,
     DuplicateSummary,
     FileObservation,
+    MultiTagContentSearch,
     RefreshChange,
     RefreshChangeSet,
     RefreshSummary,
     ScanProgress,
     ScanRun,
     ScanSummary,
-    TaggedContentSearch,
+    TagMatchMode,
     TagProvenance,
     validate_tag_name,
 )
@@ -166,11 +169,17 @@ def _build_parser() -> argparse.ArgumentParser:
         target.add_argument("--path", dest="relative_path", type=_relative_path, metavar="PATH")
         target.add_argument("--content", dest="content_id", type=_content_id, metavar="SHA256")
 
-    find_parser = tag_commands.add_parser("find", help="find bounded content identities by tag")
+    find_parser = tag_commands.add_parser("find", help="find bounded content identities by active tags")
     find_parser.add_argument("root", type=Path, metavar="ROOT")
-    find_parser.add_argument("tag", type=_tag_name, metavar="TAG")
+    find_parser.add_argument("tags", nargs="+", type=_tag_name, metavar="TAG")
+    find_parser.add_argument("--match", choices=("all", "any"), default="all")
     find_parser.add_argument("--provenance", choices=("user", "system"))
     find_parser.add_argument("--limit", type=_positive_int, default=20, metavar="N")
+    find_parser.add_argument("--details", action="store_true", help="show bounded current paths")
+    find_parser.add_argument("--path-limit", type=_positive_int, default=20, metavar="N")
+    tag_display = find_parser.add_mutually_exclusive_group()
+    tag_display.add_argument("--display-tag-limit", type=_positive_int, default=3, metavar="N")
+    tag_display.add_argument("--all-tags", action="store_true", help="show every active tag on bounded rows")
 
     return parser
 
@@ -202,13 +211,26 @@ def _migrate_catalog(root_argument: Path) -> None:
 def _handle_tags(arguments: argparse.Namespace) -> None:
     root, database_path = _catalog_paths(arguments.root)
     if arguments.tag_command == "find":
+        tag_limit = None if arguments.all_tags else arguments.display_tag_limit
         with Catalog.open(database_path) as catalog:
-            result = catalog.search_tagged_content(
-                arguments.tag,
+            result = catalog.search_content_by_tags(
+                root,
+                arguments.tags,
+                match=arguments.match,
                 provenance=arguments.provenance,
                 limit=arguments.limit,
+                path_limit=arguments.path_limit,
+                tag_limit=tag_limit,
             )
-        _print_tag_search(arguments.tag, arguments.provenance, result)
+        _print_tag_search(
+            root,
+            arguments.tags,
+            match=arguments.match,
+            provenance=arguments.provenance,
+            result=result,
+            details=arguments.details,
+            all_tags=arguments.all_tags,
+        )
         return
 
     provenance = _cli_tag_provenance()
@@ -266,19 +288,86 @@ def _print_tag_assertions(content_id: ContentId, assertions: tuple[ContentTagAss
         print(f"{assertion.tag}  {provenance.kind}  {provenance.source_name}@{provenance.source_version}{detail}")
 
 
-def _print_tag_search(tag: str, provenance: str | None, result: TaggedContentSearch) -> None:
+def _print_tag_search(
+    root: Path,
+    requested_tags: Sequence[str],
+    *,
+    match: TagMatchMode,
+    provenance: str | None,
+    result: MultiTagContentSearch,
+    details: bool,
+    all_tags: bool,
+) -> None:
     print("Tagged content")
-    print(f"Tag: {tag}")
+    print(f"Root: {root}")
     print(f"Provenance: {provenance or 'all'}")
-    print(f"Matched content: {result.total_matches}")
-    for content in result.contents:
-        print(f"{content.content_id.digest}  {_format_byte_count(content.size_bytes)}")
-        for assertion in content.assertions:
-            source = assertion.provenance
-            detail = f" [{source.source_detail}]" if source.source_detail else ""
-            print(f"  {source.kind}  {source.source_name}@{source.source_version}{detail}")
-    qualifier = "all" if len(result.contents) == result.total_matches else "first"
-    print(f"Showing {qualifier} {len(result.contents)} of {result.total_matches} content identities.")
+    if not result.contents:
+        print("No matching content.")
+    else:
+        for line in _format_tag_content_table(
+            result.contents,
+            terminal_width=_terminal_width(),
+            details=details,
+            all_tags=all_tags,
+        ):
+            print(line)
+    print(_format_tag_match_summary(result))
+    unique_tags = tuple(dict.fromkeys(requested_tags))
+    operator = " AND " if match == "all" else " OR "
+    print(f"Required tags: {operator.join(unique_tags)}")
+
+
+def _format_tag_content_table(
+    contents: tuple[ContentTagView, ...],
+    *,
+    terminal_width: int,
+    details: bool,
+    all_tags: bool,
+) -> tuple[str, ...]:
+    digest_width = 13
+    size_width = 10
+    paths_width = max(5, max(len(f"{content.current_path_count:,}") for content in contents))
+    separator_width = 9
+    tag_width = max(20, terminal_width - digest_width - size_width - paths_width - separator_width)
+    header = f"{'SHA-256':<{digest_width}} | {'Size':>{size_width}} | {'Paths':>{paths_width}} | Tags"
+    lines = [header, "-" * len(header)]
+    continuation_prefix = f"{'':<{digest_width}} | {'':>{size_width}} | {'':>{paths_width}} | "
+    for content in contents:
+        tag_lines = _format_content_tag_lines(content, tag_width=tag_width, all_tags=all_tags)
+        lines.append(
+            f"{_short_digest(content.content_id.digest):<{digest_width}} | "
+            f"{_format_byte_count(content.size_bytes):>{size_width}} | "
+            f"{content.current_path_count:>{paths_width},} | {tag_lines[0]}"
+        )
+        lines.extend(f"{continuation_prefix}{line}" for line in tag_lines[1:])
+        if details:
+            path_width = max(20, terminal_width - 2)
+            lines.extend(f"  {_truncate_text(path.as_posix(), path_width)}" for path in content.current_paths)
+    return tuple(lines)
+
+
+def _format_content_tag_lines(content: ContentTagView, *, tag_width: int, all_tags: bool) -> tuple[str, ...]:
+    joined_tags = ", ".join(content.tags)
+    if all_tags:
+        return tuple(wrap(joined_tags, width=tag_width, break_long_words=True, break_on_hyphens=False)) or ("",)
+    overflow = content.active_tag_count - len(content.tags)
+    suffix = f" +{overflow}" if overflow else ""
+    if len(joined_tags) + len(suffix) <= tag_width:
+        return (f"{joined_tags}{suffix}",)
+    if suffix and tag_width > len(suffix) + 1:
+        return (f"{_truncate_text(joined_tags, tag_width - len(suffix))}{suffix}",)
+    return (_truncate_text(f"{joined_tags}{suffix}", tag_width),)
+
+
+def _format_tag_match_summary(result: MultiTagContentSearch) -> str:
+    content_label = "content identity" if result.total_matches == 1 else "content identities"
+    path_label = "current path" if result.total_current_paths == 1 else "current paths"
+    displayed = len(result.contents)
+    qualifier = "first" if displayed < result.total_matches else "all"
+    return (
+        f"Matched: {result.total_matches:,} {content_label} · "
+        f"{result.total_current_paths:,} {path_label} (showing {qualifier} {displayed:,})"
+    )
 
 
 def _show_catalog_info(root_argument: Path) -> None:

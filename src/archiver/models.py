@@ -9,6 +9,7 @@ from typing import Literal, TypeAlias
 CurrentFileSort: TypeAlias = Literal["path", "size", "date"]
 RefreshChangeKind: TypeAlias = Literal["new", "unchanged", "modified", "missing"]
 TagProvenanceKind: TypeAlias = Literal["user", "system"]
+TagMatchMode: TypeAlias = Literal["all", "any"]
 
 _TAG_NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9._:-]{0,63}\Z")
 
@@ -80,6 +81,27 @@ class TaggedContentSearch:
 
     contents: tuple[TaggedContent, ...]
     total_matches: int
+
+
+@dataclass(frozen=True, slots=True)
+class ContentTagView:
+    """One content identity with bounded current paths and active tag names."""
+
+    content_id: ContentId
+    size_bytes: int
+    current_path_count: int
+    current_paths: tuple[PurePosixPath, ...]
+    active_tag_count: int
+    tags: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class MultiTagContentSearch:
+    """Bounded multi-tag content rows with complete content and path totals."""
+
+    contents: tuple[ContentTagView, ...]
+    total_matches: int
+    total_current_paths: int
 
 
 @dataclass(frozen=True, slots=True)
