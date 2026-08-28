@@ -124,6 +124,25 @@ class FileObservation:
 
 
 @dataclass(frozen=True, slots=True)
+class CurrentFileTagView:
+    """One current file observation with bounded active tag names."""
+
+    observation: FileObservation
+    active_tag_count: int
+    tags: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class TagAwareCurrentFileSearch:
+    """Bounded tag-aware current files with complete file/content totals."""
+
+    files: tuple[CurrentFileTagView, ...]
+    total_file_count: int
+    total_content_count: int
+    total_file_size_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
 class RefreshChange:
     """One path-level difference between a filesystem observation and the current catalog."""
 

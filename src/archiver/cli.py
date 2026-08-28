@@ -19,6 +19,7 @@ from .models import (
     ContentTagAssertion,
     ContentTagView,
     CurrentFileSort,
+    CurrentFileTagView,
     DuplicateGroupSearch,
     DuplicateGroupView,
     DuplicateSummary,
@@ -32,6 +33,7 @@ from .models import (
     ScanSummary,
     TagMatchMode,
     TagProvenance,
+    TagProvenanceKind,
     validate_tag_name,
 )
 
@@ -43,6 +45,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the Archiver command-line interface."""
     parser = _build_parser()
     arguments = parser.parse_args(argv)
+
+    file_tags: tuple[str, ...] = ()
+    tag_aware_files = False
+    if arguments.catalog_command == "files":
+        file_tags = tuple(arguments.tags or ())
+        if arguments.match_any_tag and not file_tags:
+            parser.error("--match-any-tag requires at least one --tag")
+        if arguments.provenance is not None and not file_tags:
+            parser.error("--provenance requires at least one --tag")
+        tag_aware_files = bool(file_tags) or any(
+            (
+                arguments.show_tags,
+                arguments.display_tag_limit is not None,
+                arguments.all_tags,
+            )
+        )
 
     try:
         if arguments.catalog_command == "init":
@@ -69,13 +87,27 @@ def main(argv: Sequence[str] | None = None) -> int:
                 member_limit=arguments.member_limit,
             )
         elif arguments.catalog_command == "files":
-            _show_files(
-                arguments.root,
-                path_glob=arguments.path_glob,
-                limit=arguments.limit,
-                sort_by=arguments.sort_by,
-                reverse=arguments.reverse,
-            )
+            if tag_aware_files:
+                _show_tagged_files(
+                    arguments.root,
+                    path_glob=arguments.path_glob,
+                    tags=file_tags,
+                    match="any" if arguments.match_any_tag else "all",
+                    provenance=arguments.provenance,
+                    limit=arguments.limit,
+                    sort_by=arguments.sort_by,
+                    reverse=arguments.reverse,
+                    tag_limit=None if arguments.all_tags else (arguments.display_tag_limit or 3),
+                    all_tags=arguments.all_tags,
+                )
+            else:
+                _show_files(
+                    arguments.root,
+                    path_glob=arguments.path_glob,
+                    limit=arguments.limit,
+                    sort_by=arguments.sort_by,
+                    reverse=arguments.reverse,
+                )
         else:
             parser.error("a catalog command is required")
     except (InvalidCatalogError, ScanFailure, TaggingError, OSError) as error:
@@ -153,6 +185,28 @@ def _build_parser() -> argparse.ArgumentParser:
                 help="sort by path, size, or observed modification date (default: path)",
             )
             subparser.add_argument("--reverse", action="store_true", help="invert the selected sort direction")
+            subparser.add_argument(
+                "--tag",
+                dest="tags",
+                action="append",
+                type=_tag_name,
+                metavar="TAG",
+                help="require an active content tag; repeat for AND matching",
+            )
+            subparser.add_argument(
+                "--match-any-tag",
+                action="store_true",
+                help="match any requested tag instead of every requested tag",
+            )
+            subparser.add_argument("--provenance", choices=("user", "system"))
+            subparser.add_argument("--show-tags", action="store_true", help="show active tags without filtering")
+            file_tag_display = subparser.add_mutually_exclusive_group()
+            file_tag_display.add_argument("--display-tag-limit", type=_positive_int, metavar="N")
+            file_tag_display.add_argument(
+                "--all-tags",
+                action="store_true",
+                help="show every active tag on bounded rows",
+            )
 
     tags_parser = catalog_commands.add_parser("tags", help="add, remove, and query content tags")
     tag_commands = tags_parser.add_subparsers(dest="tag_command", required=True)
@@ -472,6 +526,121 @@ def _show_files(
     print(_format_file_match_summary(result.total_matches, result.total_size_bytes, len(result.files)))
 
 
+def _show_tagged_files(
+    root_argument: Path,
+    *,
+    path_glob: str | None,
+    tags: tuple[str, ...],
+    match: TagMatchMode,
+    provenance: TagProvenanceKind | None,
+    limit: int,
+    sort_by: CurrentFileSort,
+    reverse: bool,
+    tag_limit: int | None,
+    all_tags: bool,
+) -> None:
+    root, database_path = _catalog_paths(root_argument)
+    with Catalog.open(database_path) as catalog:
+        result = catalog.search_current_files_with_tags(
+            root,
+            path_glob=path_glob,
+            tags=tags,
+            match=match,
+            provenance=provenance,
+            limit=limit,
+            sort_by=sort_by,
+            reverse=reverse,
+            tag_limit=tag_limit,
+        )
+    direction = _sort_direction(sort_by, reverse)
+    print("Current files")
+    print(f"Root: {root}")
+    print(f"Sort: {sort_by} ({direction})")
+    if not result.files:
+        print("No matching files.")
+    else:
+        for line in _format_tagged_file_table(
+            result.files,
+            terminal_width=_terminal_width(),
+            all_tags=all_tags,
+        ):
+            print(line)
+    print(
+        _format_tagged_file_match_summary(
+            result.total_file_count,
+            result.total_content_count,
+            result.total_file_size_bytes,
+            len(result.files),
+        )
+    )
+    if tags:
+        unique_tags = tuple(dict.fromkeys(tags))
+        operator = " OR " if match == "any" else " AND "
+        print(f"Required tags: {operator.join(unique_tags)}")
+        print(f"Provenance: {provenance or 'all'}")
+
+
+def _format_tagged_file_table(
+    files: tuple[CurrentFileTagView, ...],
+    *,
+    terminal_width: int,
+    all_tags: bool,
+) -> tuple[str, ...]:
+    modified_width = 20
+    size_width = 10
+    digest_width = 13
+    separator_width = 12
+    preview_width = max(
+        (
+            len(", ".join(file.tags))
+            + len(f" +{file.active_tag_count - len(file.tags)}" if file.active_tag_count > len(file.tags) else "")
+            for file in files
+        ),
+        default=0,
+    )
+    tag_width = max(20, min(40, preview_width))
+    path_width = max(
+        20,
+        terminal_width - modified_width - size_width - digest_width - tag_width - separator_width,
+    )
+    header = (
+        f"{'Modified (UTC)':<{modified_width}} | {'Size':>{size_width}} | "
+        f"{'SHA-256':<{digest_width}} | {'Path':<{path_width}} | Tags"
+    )
+    lines = [header, "-" * len(header)]
+    continuation_prefix = f"{'':<{modified_width}} | {'':>{size_width}} | {'':<{digest_width}} | {'':<{path_width}} | "
+    for file in files:
+        observation = file.observation
+        tag_lines = _format_current_file_tag_lines(file, tag_width=tag_width, all_tags=all_tags)
+        lines.append(
+            f"{_format_file_mtime(observation.mtime_ns):<{modified_width}} | "
+            f"{_format_byte_count(observation.size_bytes):>{size_width}} | "
+            f"{_short_digest(observation.content_id.digest):<{digest_width}} | "
+            f"{_truncate_text(observation.relative_path.as_posix(), path_width):<{path_width}} | "
+            f"{tag_lines[0]}"
+        )
+        lines.extend(f"{continuation_prefix}{line}" for line in tag_lines[1:])
+    return tuple(lines)
+
+
+def _format_current_file_tag_lines(
+    file: CurrentFileTagView,
+    *,
+    tag_width: int,
+    all_tags: bool,
+) -> tuple[str, ...]:
+    joined_tags = ", ".join(file.tags)
+    if all_tags:
+        return tuple(wrap(joined_tags, width=tag_width, break_long_words=True, break_on_hyphens=False)) or ("",)
+    overflow = file.active_tag_count - len(file.tags)
+    suffix = f" +{overflow}" if overflow else ""
+    if len(joined_tags) + len(suffix) <= tag_width:
+        return (f"{joined_tags}{suffix}",)
+    if suffix and tag_width > len(suffix) + 1:
+        return (f"{_truncate_text(joined_tags, tag_width - len(suffix))}{suffix}",)
+    return (_truncate_text(f"{joined_tags}{suffix}", tag_width),)
+
+
 def _format_file_table(files: tuple[FileObservation, ...], terminal_width: int) -> tuple[str, ...]:
     modified_width = 20
     size_width = 10
@@ -495,6 +664,23 @@ def _format_file_match_summary(total_matches: int, total_size_bytes: int, displa
     if displayed_count < total_matches:
         return f"{summary} (showing first {displayed_count})"
     return f"{summary} (showing all {displayed_count})"
+
+
+def _format_tagged_file_match_summary(
+    total_file_count: int,
+    total_content_count: int,
+    total_file_size_bytes: int,
+    displayed_count: int,
+) -> str:
+    file_label = "file" if total_file_count == 1 else "files"
+    content_label = "distinct content" if total_content_count == 1 else "distinct contents"
+    summary = (
+        f"Matched: {total_file_count:,} {file_label} · "
+        f"{total_content_count:,} {content_label} · "
+        f"{_format_byte_count(total_file_size_bytes)} across file paths"
+    )
+    qualifier = "first" if displayed_count < total_file_count else "all"
+    return f"{summary} (showing {qualifier} {displayed_count:,})"
 
 
 def _terminal_width() -> int:

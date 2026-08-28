@@ -19,6 +19,7 @@ from .models import (
     ContentTagView,
     CurrentFileSearch,
     CurrentFileSort,
+    CurrentFileTagView,
     DuplicateGroupSearch,
     DuplicateGroupView,
     DuplicateSummary,
@@ -32,6 +33,7 @@ from .models import (
     ScanProgress,
     ScanRun,
     ScanSummary,
+    TagAwareCurrentFileSearch,
     TaggedContent,
     TaggedContentSearch,
     TagMatchMode,
@@ -881,6 +883,175 @@ class Catalog:
             files=files,
             total_matches=int(count_row["total_matches"]),
             total_size_bytes=int(count_row["total_size_bytes"]),
+        )
+
+    def search_current_files_with_tags(
+        self,
+        root: Path,
+        *,
+        path_glob: str | None = None,
+        tags: Collection[str] = (),
+        match: TagMatchMode = "all",
+        provenance: TagProvenanceKind | None = None,
+        sort_by: CurrentFileSort = "path",
+        reverse: bool = False,
+        limit: int = 20,
+        tag_limit: int | None = 3,
+    ) -> TagAwareCurrentFileSearch:
+        """Return bounded current files with tag filtering and active-tag previews."""
+        canonical_tags = tuple(dict.fromkeys(validate_tag_name(tag) for tag in tags))
+        if match not in ("all", "any"):
+            raise ValueError("match must be 'all' or 'any'")
+        if provenance not in (None, "user", "system"):
+            raise ValueError("provenance must be 'user', 'system', or None")
+        if provenance is not None and not canonical_tags:
+            raise ValueError("provenance requires at least one tag")
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+        if tag_limit is not None and tag_limit < 1:
+            raise ValueError("tag_limit must be at least 1 or None")
+
+        order_column, default_direction = self._current_file_order(sort_by)
+        direction = self._reverse_direction(default_direction) if reverse else default_direction
+        location = self._location_for_root(root)
+        if location is None:
+            return TagAwareCurrentFileSearch(
+                files=(),
+                total_file_count=0,
+                total_content_count=0,
+                total_file_size_bytes=0,
+            )
+
+        matching_content_cte = ""
+        matching_content_clause = ""
+        matching_parameters: list[object] = []
+        if canonical_tags:
+            tag_placeholders = ", ".join("?" for _ in canonical_tags)
+            provenance_clause = "" if provenance is None else "AND assertions.provenance_kind = ?"
+            matching_parameters.extend(canonical_tags)
+            if provenance is not None:
+                matching_parameters.append(provenance)
+            matching_parameters.append(len(canonical_tags) if match == "all" else 1)
+            matching_content_cte = f"""
+                WITH matching_content AS (
+                    SELECT assertions.content_id
+                    FROM content_tag_assertions AS assertions
+                    JOIN tags ON tags.id = assertions.tag_id
+                    WHERE assertions.retracted_at_ns IS NULL
+                      AND tags.name IN ({tag_placeholders})
+                      {provenance_clause}
+                    GROUP BY assertions.content_id
+                    HAVING COUNT(DISTINCT tags.name) >= ?
+                )
+            """
+            matching_content_clause = " AND observations.content_id IN (SELECT content_id FROM matching_content)"
+
+        where_clause = f"WHERE scans.location_id = ? AND scans.id = locations.current_scan_id{matching_content_clause}"
+        parameters: list[object] = [*matching_parameters, location.id]
+        if path_glob is not None:
+            where_clause += " AND observations.relative_path GLOB ?"
+            parameters.append(path_glob)
+
+        count_row = self._connection.execute(
+            f"""
+            {matching_content_cte}
+            SELECT
+                COUNT(*) AS total_file_count,
+                COUNT(DISTINCT observations.content_id) AS total_content_count,
+                COALESCE(SUM(observations.size_bytes), 0) AS total_file_size_bytes
+            FROM file_observations AS observations
+            JOIN scan_runs AS scans ON scans.id = observations.scan_id
+            JOIN locations ON locations.id = scans.location_id
+            {where_clause}
+            """,
+            parameters,
+        ).fetchone()
+        assert count_row is not None
+
+        rows = tuple(
+            self._connection.execute(
+                f"""
+                {matching_content_cte}
+                SELECT
+                    observations.relative_path AS relative_path,
+                    observations.size_bytes AS size_bytes,
+                    observations.mtime_ns AS mtime_ns,
+                    content.id AS content_row_id,
+                    content.algorithm AS algorithm,
+                    content.digest AS digest
+                FROM file_observations AS observations
+                JOIN scan_runs AS scans ON scans.id = observations.scan_id
+                JOIN locations ON locations.id = scans.location_id
+                JOIN content ON content.id = observations.content_id
+                {where_clause}
+                ORDER BY {order_column} {direction}, observations.relative_path ASC
+                LIMIT ?
+                """,
+                (*parameters, limit),
+            )
+        )
+        if not rows:
+            return TagAwareCurrentFileSearch(
+                files=(),
+                total_file_count=int(count_row["total_file_count"]),
+                total_content_count=int(count_row["total_content_count"]),
+                total_file_size_bytes=int(count_row["total_file_size_bytes"]),
+            )
+
+        content_row_ids = tuple(dict.fromkeys(int(row["content_row_id"]) for row in rows))
+        content_placeholders = ", ".join("?" for _ in content_row_ids)
+        tag_limit_clause = "" if tag_limit is None else "WHERE tag_rank <= ?"
+        tag_parameters: tuple[object, ...] = content_row_ids if tag_limit is None else (*content_row_ids, tag_limit)
+        tag_rows = self._connection.execute(
+            f"""
+            WITH distinct_active_tags AS (
+                SELECT DISTINCT assertions.content_id AS content_row_id, tags.name AS tag_name
+                FROM content_tag_assertions AS assertions
+                JOIN tags ON tags.id = assertions.tag_id
+                WHERE assertions.retracted_at_ns IS NULL
+                  AND assertions.content_id IN ({content_placeholders})
+            ),
+            ranked_tags AS (
+                SELECT
+                    content_row_id,
+                    tag_name,
+                    COUNT(*) OVER (PARTITION BY content_row_id) AS active_tag_count,
+                    ROW_NUMBER() OVER (PARTITION BY content_row_id ORDER BY tag_name) AS tag_rank
+                FROM distinct_active_tags
+            )
+            SELECT content_row_id, tag_name, active_tag_count
+            FROM ranked_tags
+            {tag_limit_clause}
+            ORDER BY content_row_id, tag_name
+            """,
+            tag_parameters,
+        )
+        tags_by_content: dict[int, list[str]] = {row_id: [] for row_id in content_row_ids}
+        tag_counts = {row_id: 0 for row_id in content_row_ids}
+        for row in tag_rows:
+            row_id = int(row["content_row_id"])
+            tag_counts[row_id] = int(row["active_tag_count"])
+            tags_by_content[row_id].append(str(row["tag_name"]))
+
+        files = tuple(
+            CurrentFileTagView(
+                observation=FileObservation(
+                    location=location,
+                    relative_path=PurePosixPath(str(row["relative_path"])),
+                    content_id=ContentId(algorithm=str(row["algorithm"]), digest=str(row["digest"])),
+                    size_bytes=int(row["size_bytes"]),
+                    mtime_ns=int(row["mtime_ns"]),
+                ),
+                active_tag_count=tag_counts[int(row["content_row_id"])],
+                tags=tuple(tags_by_content[int(row["content_row_id"])]),
+            )
+            for row in rows
+        )
+        return TagAwareCurrentFileSearch(
+            files=files,
+            total_file_count=int(count_row["total_file_count"]),
+            total_content_count=int(count_row["total_content_count"]),
+            total_file_size_bytes=int(count_row["total_file_size_bytes"]),
         )
 
     def find_by_content(self, root: Path, content_id: ContentId) -> list[FileObservation]:

@@ -12,7 +12,7 @@ Early development.
 
 The current implementation target is:
 
-**Plan 003.2 — Content-Level Tags**
+**Plan 003.3b — Tag-Aware Current-File Search**
 
 This establishes the core catalog model:
 
@@ -25,7 +25,8 @@ This establishes the core catalog model:
 * safe handling of failed scans;
 * filesystem reconciliation and atomic refresh application;
 * bounded file and duplicate inspection;
-* provenance-aware content tags with explicit schema migration.
+* provenance-aware content tags with explicit schema migration;
+* bounded multi-tag content and tag-aware current-file search.
 
 Archive ingest, automatic tag classification, tag merge policy, destructive duplicate handling, and managed archive storage remain out of scope.
 
@@ -120,6 +121,7 @@ Public tutorials:
 * `notebooks/public/catalog-refresh-and-reconciliation.ipynb` — dry-run reconciliation, atomic refresh application, stale-baseline protection, and equivalent CLI use.
 * `notebooks/public/plan-003.2-content-level-tags.ipynb` — content-level tags, producer provenance, refresh survival, bounded queries, and CLI use.
 * `notebooks/public/plan-003.3a-multi-tag-content-search.ipynb` — bounded AND/OR content search, provenance filters, path/tag previews, orphaned content, and direct CLI use.
+* `notebooks/public/plan-003.3b-tag-aware-current-file-search.ipynb` — tag-aware current-file filtering, display-only tags, path/sort composition, bounded previews, refresh isolation, and explicit `!` CLI use.
 * `notebooks/public/plan-004-managed-operations-motivation.ipynb` — managed authority, reviewable quarantine planning, live precondition validation, and recoverable-operation motivation.
 
 
