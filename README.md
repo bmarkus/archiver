@@ -6,6 +6,9 @@ The project is being developed incrementally, starting with a reliable file cata
 
 The implementation is Python-first. Performance-critical components may later be replaced with Rust only where profiling shows a real need.
 
+Archiver is also an educational exercise in building a system from first principles. It is developed from the bottom up through a deliberate combination of human judgment and agent-assisted work, with particular emphasis on clear structure, sound architecture, and readable code.
+The project’s incremental plans and commit history document not only the resulting features, but also the process of designing and implementing them. Development proceeds in small, reviewable steps while leaving room for new discoveries to reshape earlier decisions—even foundational ones. The evolution of the system is intended to be as instructive as the finished result.
+
 ## Project status
 
 Early development.
@@ -115,15 +118,6 @@ uv run jupyter lab notebooks
 ```
 
 ### Notebook privacy and commits
-Public tutorials:
-
-* `notebooks/public/plan-001-catalog-tour.ipynb` — scanning, duplicate discovery, rename identity, and failed-scan safety.
-* `notebooks/public/catalog-refresh-and-reconciliation.ipynb` — dry-run reconciliation, atomic refresh application, stale-baseline protection, and equivalent CLI use.
-* `notebooks/public/plan-003.2-content-level-tags.ipynb` — content-level tags, producer provenance, refresh survival, bounded queries, and CLI use.
-* `notebooks/public/plan-003.3a-multi-tag-content-search.ipynb` — bounded AND/OR content search, provenance filters, path/tag previews, orphaned content, and direct CLI use.
-* `notebooks/public/plan-003.3b-tag-aware-current-file-search.ipynb` — tag-aware current-file filtering, display-only tags, path/sort composition, bounded previews, refresh isolation, and explicit `!` CLI use.
-* `notebooks/public/plan-004-managed-operations-motivation.ipynb` — managed authority, reviewable quarantine planning, live precondition validation, and recoverable-operation motivation.
-
 
 Public tutorials live in `notebooks/public/` and use only temporary, synthetic data. Personal exploration belongs in `notebooks/private/`, which Git ignores. Do not move a private notebook into the public directory until its code and outputs contain no local paths, filenames, or other private data.
 
