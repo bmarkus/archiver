@@ -194,6 +194,7 @@ Manage content-level tags through a current path or SHA-256 digest:
 uv run archiver catalog tags add C:\path\to\root favorite --path photos/example.jpg
 uv run archiver catalog tags list C:\path\to\root --path photos/example.jpg
 uv run archiver catalog tags find C:\path\to\root favorite --limit 20
+uv run archiver catalog tags available C:\path\to\root --sort assertions --limit 20
 ```
 The SQLite catalog is stored at `.archiver/catalog.sqlite` below the chosen root. The `.archiver` control directory is excluded from refreshes and scans.
 

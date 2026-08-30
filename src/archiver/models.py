@@ -7,6 +7,7 @@ from pathlib import Path, PurePosixPath
 from typing import Literal, TypeAlias
 
 CurrentFileSort: TypeAlias = Literal["path", "size", "date"]
+AvailableTagSort: TypeAlias = Literal["name", "content", "assertions"]
 RefreshChangeKind: TypeAlias = Literal["new", "unchanged", "modified", "missing"]
 TagProvenanceKind: TypeAlias = Literal["user", "system"]
 TagMatchMode: TypeAlias = Literal["all", "any"]
@@ -64,6 +65,25 @@ class ContentTagAssertion:
     tag: str
     provenance: TagProvenance
     asserted_at_ns: int
+
+
+@dataclass(frozen=True, slots=True)
+class TagUsage:
+    """Active catalog-wide usage counts for one canonical tag."""
+
+    tag: str
+    content_count: int
+    assertion_count: int
+    user_assertion_count: int
+    system_assertion_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class AvailableTagSearch:
+    """Bounded active tag usage rows with the complete matching count."""
+
+    tags: tuple[TagUsage, ...]
+    total_matches: int
 
 
 @dataclass(frozen=True, slots=True)

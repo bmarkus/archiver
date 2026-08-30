@@ -23,8 +23,8 @@ Each subplan must identify its parent plan and include created, implementation, 
 | 003 | [Bounded Duplicate Inspection](003-bounded-duplicate-inspection.md) | Implemented (pending commit) | 001 | Bounded duplicate-group and member inspection with complete aggregate metrics. |
 | 003.1 | [Catalog Safety and Boundary Test Expansion](003.1-catalog-safety-and-boundary-tests.md) | Implemented (pending commit) | 003 | Regression coverage for transactional, persistence, filesystem, hashing, location, refresh, and CLI safety boundaries. |
 | 003.2 | [Content-Level Tags](003.2-content-level-tags.md) | Implemented (pending commit) | 003 | Provenance-aware content tags, explicit schema migration, and bounded tag queries. |
-| 003.3 | [Bounded Tag and File Search](003.3-bounded-tag-and-file-search.md) | Umbrella design record | 003.2 | Shared design boundary for bounded content, file, and vocabulary search. |
+| 003.3 | [Bounded Tag and File Search](003.3-bounded-tag-and-file-search.md) | Implemented (pending review) | 003.2 | Shared design boundary for bounded content, file, and vocabulary search. |
 | 003.3a | [Multi-Tag Content Search](003.3a-bounded-tag-query-apis.md) | Implemented (approved) | 003.3 | End-to-end bounded multi-tag content API and `tags find` CLI. |
-| 003.3b | [Tag-Aware Current-File Search](003.3b-tag-aware-file-and-content-cli.md) | Implemented (pending review) | 003.3 | End-to-end tag-aware current-file API and compatible `catalog files` CLI. |
-| 003.3c | [Available Tag Vocabulary](003.3c-tag-vocabulary-cli.md) | Planned | 003.3 | End-to-end active vocabulary usage API and `tags available` CLI. |
+| 003.3b | [Tag-Aware Current-File Search](003.3b-tag-aware-file-and-content-cli.md) | Implemented (approved) | 003.3 | End-to-end tag-aware current-file API and compatible `catalog files` CLI. |
+| 003.3c | [Available Tag Vocabulary](003.3c-tag-vocabulary-cli.md) | Implemented (pending review) | 003.3 | End-to-end active vocabulary usage API and `tags available` CLI. |
 

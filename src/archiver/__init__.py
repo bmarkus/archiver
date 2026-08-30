@@ -3,6 +3,8 @@
 from .catalog import Catalog
 from .errors import InvalidCatalogError, RefreshFailure, ScanFailure, StaleRefreshError, TaggingError
 from .models import (
+    AvailableTagSearch,
+    AvailableTagSort,
     ContentId,
     ContentTagAssertion,
     ContentTagView,
@@ -29,10 +31,13 @@ from .models import (
     TagMatchMode,
     TagProvenance,
     TagProvenanceKind,
+    TagUsage,
     validate_tag_name,
 )
 
 __all__ = [
+    "AvailableTagSearch",
+    "AvailableTagSort",
     "Catalog",
     "ContentId",
     "ContentTagAssertion",
@@ -65,5 +70,6 @@ __all__ = [
     "TaggingError",
     "TagProvenance",
     "TagProvenanceKind",
+    "TagUsage",
     "validate_tag_name",
 ]

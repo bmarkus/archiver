@@ -17,7 +17,7 @@ Read these files before implementation or architectural changes:
 
 The active implementation plan is:
 
-- `docs/plans/003.3b-tag-aware-file-and-content-cli.md`
+- `docs/plans/003.3c-tag-vocabulary-cli.md`
 
 `docs/plans/003.3-bounded-tag-and-file-search.md` is the umbrella design
 record for Plans 003.3a-003.3c, not a single implementation increment.

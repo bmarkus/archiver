@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import sys
 from collections.abc import Sequence
@@ -15,6 +16,8 @@ from typing import TextIO
 from .catalog import SCHEMA_VERSION, Catalog
 from .errors import InvalidCatalogError, ScanFailure, TaggingError
 from .models import (
+    AvailableTagSearch,
+    AvailableTagSort,
     ContentId,
     ContentTagAssertion,
     ContentTagView,
@@ -34,6 +37,7 @@ from .models import (
     TagMatchMode,
     TagProvenance,
     TagProvenanceKind,
+    TagUsage,
     validate_tag_name,
 )
 
@@ -235,6 +239,20 @@ def _build_parser() -> argparse.ArgumentParser:
     tag_display.add_argument("--display-tag-limit", type=_positive_int, default=3, metavar="N")
     tag_display.add_argument("--all-tags", action="store_true", help="show every active tag on bounded rows")
 
+    available_parser = tag_commands.add_parser("available", help="show bounded active tag usage")
+    available_parser.add_argument("root", type=Path, metavar="ROOT")
+    available_parser.add_argument("--regex", dest="name_regex", type=_regex_source, metavar="REGEX")
+    available_parser.add_argument("--provenance", choices=("user", "system"))
+    available_parser.add_argument("--limit", type=_positive_int, default=20, metavar="N")
+    available_parser.add_argument(
+        "--sort",
+        dest="sort_by",
+        choices=("name", "content", "assertions"),
+        default="name",
+        help="sort by name, distinct content, or active assertions (default: name)",
+    )
+    available_parser.add_argument("--reverse", action="store_true", help="invert the selected sort direction")
+
     return parser
 
 
@@ -264,10 +282,28 @@ def _migrate_catalog(root_argument: Path) -> None:
 
 def _handle_tags(arguments: argparse.Namespace) -> None:
     root, database_path = _catalog_paths(arguments.root)
+    if arguments.tag_command == "available":
+        with Catalog.open(database_path) as catalog:
+            available_result = catalog.search_available_tags(
+                name_regex=arguments.name_regex,
+                provenance=arguments.provenance,
+                sort_by=arguments.sort_by,
+                reverse=arguments.reverse,
+                limit=arguments.limit,
+            )
+        _print_available_tags(
+            root,
+            name_regex=arguments.name_regex,
+            provenance=arguments.provenance,
+            sort_by=arguments.sort_by,
+            reverse=arguments.reverse,
+            result=available_result,
+        )
+        return
     if arguments.tag_command == "find":
         tag_limit = None if arguments.all_tags else arguments.display_tag_limit
         with Catalog.open(database_path) as catalog:
-            result = catalog.search_content_by_tags(
+            tag_result = catalog.search_content_by_tags(
                 root,
                 arguments.tags,
                 match=arguments.match,
@@ -281,7 +317,7 @@ def _handle_tags(arguments: argparse.Namespace) -> None:
             arguments.tags,
             match=arguments.match,
             provenance=arguments.provenance,
-            result=result,
+            result=tag_result,
             details=arguments.details,
             all_tags=arguments.all_tags,
         )
@@ -340,6 +376,61 @@ def _print_tag_assertions(content_id: ContentId, assertions: tuple[ContentTagAss
         provenance = assertion.provenance
         detail = f" [{provenance.source_detail}]" if provenance.source_detail else ""
         print(f"{assertion.tag}  {provenance.kind}  {provenance.source_name}@{provenance.source_version}{detail}")
+
+
+def _print_available_tags(
+    root: Path,
+    *,
+    name_regex: str | None,
+    provenance: TagProvenanceKind | None,
+    sort_by: AvailableTagSort,
+    reverse: bool,
+    result: AvailableTagSearch,
+) -> None:
+    print("Available tags")
+    print(f"Root: {root}")
+    print(f"Sort: {sort_by} ({_available_tag_sort_direction(sort_by, reverse)})")
+    print(f"Provenance: {provenance or 'all'}")
+    if name_regex is not None:
+        print(f"Regex: {name_regex}")
+    if not result.tags:
+        print("No matching active tags.")
+    else:
+        for line in _format_available_tag_table(result.tags, terminal_width=_terminal_width()):
+            print(line)
+    print(_format_available_tag_summary(result))
+
+
+def _format_available_tag_table(tags: tuple[TagUsage, ...], *, terminal_width: int) -> tuple[str, ...]:
+    content_width = max(len("Content"), *(len(f"{usage.content_count:,}") for usage in tags))
+    assertions_width = max(len("Assertions"), *(len(f"{usage.assertion_count:,}") for usage in tags))
+    user_width = max(len("User"), *(len(f"{usage.user_assertion_count:,}") for usage in tags))
+    system_width = max(len("System"), *(len(f"{usage.system_assertion_count:,}") for usage in tags))
+    separator_width = 12
+    tag_width = max(
+        len("Tag"),
+        terminal_width - content_width - assertions_width - user_width - system_width - separator_width,
+    )
+    header = (
+        f"{'Tag':<{tag_width}} | {'Content':>{content_width}} | "
+        f"{'Assertions':>{assertions_width}} | {'User':>{user_width}} | {'System':>{system_width}}"
+    )
+    rows = tuple(
+        f"{_truncate_text(usage.tag, tag_width):<{tag_width}} | "
+        f"{usage.content_count:>{content_width},} | "
+        f"{usage.assertion_count:>{assertions_width},} | "
+        f"{usage.user_assertion_count:>{user_width},} | "
+        f"{usage.system_assertion_count:>{system_width},}"
+        for usage in tags
+    )
+    return (header, "-" * len(header), *rows)
+
+
+def _format_available_tag_summary(result: AvailableTagSearch) -> str:
+    tag_label = "active tag" if result.total_matches == 1 else "active tags"
+    displayed = len(result.tags)
+    qualifier = "first" if displayed < result.total_matches else "all"
+    return f"Matched: {result.total_matches:,} {tag_label} (showing {qualifier} {displayed:,})"
 
 
 def _print_tag_search(
@@ -709,6 +800,13 @@ def _sort_direction(sort_by: CurrentFileSort, reverse: bool) -> str:
     return direction
 
 
+def _available_tag_sort_direction(sort_by: AvailableTagSort, reverse: bool) -> str:
+    direction = "ascending" if sort_by == "name" else "descending"
+    if reverse:
+        return "descending" if direction == "ascending" else "ascending"
+    return direction
+
+
 def _catalog_paths(root_argument: Path) -> tuple[Path, Path]:
     root = _canonical_root(root_argument)
     return root, root / _CONTROL_DIRECTORY_NAME / _DATABASE_FILE_NAME
@@ -719,6 +817,14 @@ def _tag_name(value: str) -> str:
         return validate_tag_name(value)
     except ValueError as error:
         raise argparse.ArgumentTypeError(str(error)) from error
+
+
+def _regex_source(value: str) -> str:
+    try:
+        re.compile(value)
+    except re.error as error:
+        raise argparse.ArgumentTypeError(f"invalid regular expression: {error}") from error
+    return value
 
 
 def _content_id(value: str) -> ContentId:

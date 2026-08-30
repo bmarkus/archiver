@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from collections.abc import Callable, Collection, Iterator
 from contextlib import suppress
@@ -14,6 +15,8 @@ from .errors import InvalidCatalogError, RefreshFailure, ScanFailure, StaleRefre
 from .filesystem import regular_files
 from .hashing import hash_file_stably
 from .models import (
+    AvailableTagSearch,
+    AvailableTagSort,
     ContentId,
     ContentTagAssertion,
     ContentTagView,
@@ -39,10 +42,12 @@ from .models import (
     TagMatchMode,
     TagProvenance,
     TagProvenanceKind,
+    TagUsage,
     validate_tag_name,
 )
 
 SCHEMA_VERSION = 2
+_TAG_NAME_REGEX_FUNCTION = "archiver_tag_name_regex"
 
 _SCHEMA = """
 CREATE TABLE catalog_metadata (
@@ -530,6 +535,95 @@ class Catalog:
     def tags_for_path(self, root: Path, relative_path: PurePosixPath) -> tuple[ContentTagAssertion, ...]:
         """Return active content tags resolved through a current relative path."""
         return self.tags_for_content(self._content_for_current_path(root, relative_path))
+
+    def search_available_tags(
+        self,
+        *,
+        name_regex: str | None = None,
+        provenance: TagProvenanceKind | None = None,
+        sort_by: AvailableTagSort = "name",
+        reverse: bool = False,
+        limit: int = 20,
+    ) -> AvailableTagSearch:
+        """Return bounded catalog-wide active tag usage counts."""
+        compiled_regex = None if name_regex is None else re.compile(name_regex)
+        if provenance not in (None, "user", "system"):
+            raise ValueError("provenance must be 'user', 'system', or None")
+        if sort_by not in ("name", "content", "assertions"):
+            raise ValueError(f"unsupported available-tag sort: {sort_by}")
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+
+        provenance_clause = "" if provenance is None else "AND assertions.provenance_kind = ?"
+        parameters: tuple[object, ...] = () if provenance is None else (provenance,)
+        regex_clause = "" if compiled_regex is None else f"WHERE {_TAG_NAME_REGEX_FUNCTION}(tag_name)"
+        usage_cte = f"""
+            WITH tag_usage AS (
+                SELECT
+                    tags.name AS tag_name,
+                    COUNT(DISTINCT assertions.content_id) AS content_count,
+                    COUNT(*) AS assertion_count,
+                    SUM(assertions.provenance_kind = 'user') AS user_assertion_count,
+                    SUM(assertions.provenance_kind = 'system') AS system_assertion_count
+                FROM content_tag_assertions AS assertions
+                JOIN tags ON tags.id = assertions.tag_id
+                WHERE assertions.retracted_at_ns IS NULL
+                  {provenance_clause}
+                GROUP BY tags.id, tags.name
+            )
+        """
+        order_column = {
+            "name": "tag_name",
+            "content": "content_count",
+            "assertions": "assertion_count",
+        }[sort_by]
+        default_direction = "ASC" if sort_by == "name" else "DESC"
+        direction = self._reverse_direction(default_direction) if reverse else default_direction
+        tie_breaker = "" if sort_by == "name" else ", tag_name ASC"
+
+        if compiled_regex is not None:
+
+            def matches_tag_name(tag_name: str) -> int:
+                return int(compiled_regex.search(tag_name) is not None)
+
+            self._connection.create_function(
+                _TAG_NAME_REGEX_FUNCTION,
+                1,
+                matches_tag_name,
+                deterministic=True,
+            )
+        try:
+            count_row = self._connection.execute(
+                f"""
+                {usage_cte}
+                SELECT COUNT(*) AS total_matches
+                FROM tag_usage
+                {regex_clause}
+                """,
+                parameters,
+            ).fetchone()
+            assert count_row is not None
+            rows = self._connection.execute(
+                f"""
+                {usage_cte}
+                SELECT
+                    tag_name,
+                    content_count,
+                    assertion_count,
+                    user_assertion_count,
+                    system_assertion_count
+                FROM tag_usage
+                {regex_clause}
+                ORDER BY {order_column} {direction}{tie_breaker}
+                LIMIT ?
+                """,
+                (*parameters, limit),
+            )
+            tags = tuple(self._tag_usage_from_row(row) for row in rows)
+        finally:
+            if compiled_regex is not None:
+                self._connection.create_function(_TAG_NAME_REGEX_FUNCTION, 1, None)
+        return AvailableTagSearch(tags=tags, total_matches=int(count_row["total_matches"]))
 
     def search_tagged_content(
         self,
@@ -1283,6 +1377,16 @@ class Catalog:
         if relative_path.is_absolute() or text in ("", ".") or ".." in relative_path.parts or "\\" in text:
             raise ValueError("tag path must be a non-empty POSIX relative path without parent traversal")
         return relative_path
+
+    @staticmethod
+    def _tag_usage_from_row(row: sqlite3.Row) -> TagUsage:
+        return TagUsage(
+            tag=str(row["tag_name"]),
+            content_count=int(row["content_count"]),
+            assertion_count=int(row["assertion_count"]),
+            user_assertion_count=int(row["user_assertion_count"]),
+            system_assertion_count=int(row["system_assertion_count"]),
+        )
 
     @staticmethod
     def _tag_assertion_from_row(row: sqlite3.Row, content_id: ContentId) -> ContentTagAssertion:
