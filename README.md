@@ -275,4 +275,4 @@ If an implementation plan conflicts with a documented invariant, the conflict sh
 
 ## License
 
-License not yet selected.
+Archiver is licensed under the [MIT License](LICENSE).
