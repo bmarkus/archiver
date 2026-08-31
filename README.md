@@ -1,69 +1,61 @@
 # Archiver
 
-Archiver is a content-oriented file cataloging and archival system.
+Archiver is a content-oriented local file catalog. It records content identity, observed file instances, scan history, duplicates, and provenance-aware tags without modifying source files.
 
-The project is being developed incrementally, starting with a reliable file catalog and later expanding toward managed archives, ingest, tagging, metadata reconciliation, duplicate handling, and local working copies for expensive processing.
+The project is being developed incrementally, starting with a reliable file catalog and later expanding toward managed archives.
 
 The implementation is Python-first. Performance-critical components may later be replaced with Rust only where profiling shows a real need.
 
 Archiver is also an educational exercise in building a system from first principles. It is developed from the bottom up through a deliberate combination of human judgment and agent-assisted work, with particular emphasis on clear structure, sound architecture, and readable code.
+
 The project’s incremental plans and commit history document not only the resulting features, but also the process of designing and implementing them. Development proceeds in small, reviewable steps while leaving room for new discoveries to reshape earlier decisions—even foundational ones. The evolution of the system is intended to be as instructive as the finished result.
+
 
 ## Project status
 
-Early development.
+Phase 1 is feature-frozen. Its scope, completed capabilities, and design boundary are summarized in [Phase 1 — Catalog Foundation](docs/phases/phase-1-catalog-foundation.md).
 
-The current implementation target is:
+A frozen reference is preserved on the [`phase/1-catalog-foundation`](https://github.com/bmarkus/archiver/tree/phase/1-catalog-foundation) branch. It allows readers to inspect the Phase 1 endpoint and the commit history leading to it independently of later development.
 
-**Plan 003.3b — Tag-Aware Current-File Search**
+The first implementation phase established the catalog foundation: content identity, scan history and current state, filesystem reconciliation, bounded inspection, and provenance-aware content tags.
 
-This establishes the core catalog model:
+## Development phases
 
-* persistent SQLite catalog;
-* SHA-256 content identity;
-* recursive local-directory scanning;
-* scan history;
-* current-state queries;
-* duplicate-content discovery;
-* safe handling of failed scans;
-* filesystem reconciliation and atomic refresh application;
-* bounded file and duplicate inspection;
-* provenance-aware content tags with explicit schema migration;
-* bounded multi-tag content and tag-aware current-file search.
+Incremental design and implementation history is preserved in the [plan archive](docs/plans/README.md).
 
-Archive ingest, automatic tag classification, tag merge policy, destructive duplicate handling, and managed archive storage remain out of scope.
+## Catalog concepts
 
-## Core ideas
+A catalog is an index of files Archiver has observed. It records their content, where copies were found, their tags, and the history of successful scans. Cataloging describes files; it does not modify or manage them.
 
-### Content identity
+### Content and file instances
 
-Files are identified by their contents, not by their pathname.
+Archiver identifies **content** by its bytes rather than its filename or path. A **file instance** is one observed copy of that content at a particular location.
 
-Two files with different names or locations may represent the same content if their cryptographic hashes are equal.
+For example, copying the same photograph from a laptop to an external drive creates two file instances with one content identity. Editing the photograph in place creates new content at the same path.
 
-Conversely, the same pathname may contain different content at different times.
+### Scans and history
+
+A scan records what Archiver observed at a location. The latest successful scan defines its current state, while earlier scans remain available as history.
+
+For example, if a file appeared in Monday’s scan but disappeared by Tuesday, the catalog retains the earlier observation while reporting that the file is no longer current. A failed scan never replaces the last successful state.
+
+### Duplicates
+
+Files are duplicates when their bytes are identical, even if their names or locations differ.
+
+For example, `report.pdf` and `report-final.pdf` are duplicates if they contain the same bytes. Files that share a name but contain different bytes are not duplicates. Finding duplicates does not authorize Archiver to remove either copy.
+
+### Tags
+
+Tags describe content rather than a particular pathname. Applying a tag through a path first identifies the content stored there.
+
+For example, tagging one copy of a photograph as `family` associates that tag with the photograph’s content, so another identical copy represents the same tagged content. Archiver also records whether a tag came from a user or a tool and preserves retracted assertions as history.
 
 ### Catalogs and archives
 
-A **catalog** describes files and their metadata.
+A catalog observes and describes files. An archive would additionally manage designated storage and therefore requires explicit authority to change it.
 
-An **archive** is conceptually a catalog associated with storage that Archiver is explicitly authorized to manage.
-
-The two do not require fundamentally different database models.
-
-### Scans are observations
-
-Scanning a directory is read-only.
-
-A scan records what was observed at a particular location. The latest successful scan defines the current catalog state for that location.
-
-A failed or interrupted scan must never replace the previous successful state.
-
-### History and provenance
-
-The design favors preserving historical information rather than silently overwriting it.
-
-Tag assertions now retain user/system provenance, producer name, producer version, and retraction history. Catalog merge policy and public historical-tag queries remain future work.
+The current implementation is a catalog. It does not manage archive storage.
 
 ## Repository structure
 
@@ -76,8 +68,6 @@ Tag assertions now retain user/system provenance, producer name, producer versio
 │   ├── domain-model.md
 │   ├── invariants.md
 │   └── plans/
-│       ├── 001-catalog-foundation.md
-│       └── 002-catalog-refresh-and-reconciliation.md
 ├── src/
 │   └── archiver/
 └── tests/
@@ -87,8 +77,8 @@ Important project documents:
 
 * [`docs/domain-model.md`](docs/domain-model.md) — conceptual model and terminology.
 * [`docs/invariants.md`](docs/invariants.md) — properties that implementations must preserve.
-* [`docs/plans/002-catalog-refresh-and-reconciliation.md`](docs/plans/002-catalog-refresh-and-reconciliation.md) — current implementation plan and refresh design.
 * [`AGENTS.md`](AGENTS.md) — instructions for coding agents working in this repository.
+* [`docs/plans/README.md`](docs/plans/README.md) — chronological archive of implementation plans and decisions.
 
 ## Development
 
@@ -218,41 +208,17 @@ uv run mypy src tests
 
 Run the full validation set before considering an implementation task complete.
 
-## Development principles
+## Implementation principles
 
 The project follows a few deliberately conservative rules:
 
 * Prefer simple Python implementations first.
 * Measure before optimizing.
-* Keep content identity independent of path and storage location.
 * Never make destructive filesystem changes implicitly.
 * Keep persistent schema changes explicit and versioned.
-* Preserve historical information where future reconciliation may depend on it.
 * Keep implementation increments small and independently testable.
 * Do not implement functionality belonging to future plans prematurely.
 
-## Current roadmap
-
-The roadmap is intentionally incremental.
-
-### Plan 001 — Catalog foundation
-
-Create and open catalogs, scan local directories, hash file content, persist observations, query current state, and detect duplicate content.
-
-### Later plans
-
-Likely later stages include:
-
-* richer catalog queries;
-* richer tag and metadata history and merge policy;
-* catalog comparison and merge;
-* archive-managed storage;
-* source-to-archive ingest;
-* duplicate-resolution policies;
-* local working-copy/cache support for expensive processing;
-* performance profiling and targeted optimization.
-
-These later stages are not yet part of the current implementation contract.
 
 ## Working with coding agents
 
