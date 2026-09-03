@@ -1,3 +1,15 @@
 key design principle in managing (i.e. comparing) catalogs:
 
 observe → compare → describe → apply
+
+
+# why grammar is needed
+
+That's probably the simplest concrete demonstration of why a grammar is useful:
+Features that should compose horizontally are currently causing the API to grow vertically.
+The grammar turns current, path filtering, tag filtering, sorting, and tag previews into reusable building blocks instead of requiring a new function for every useful combination.
+
+
+* Specialized functions cause API proliferation.
+* Large parameterized functions avoid that, but risk internal conditional proliferation.
+* A grammar moves those combinations into explicit composition.
