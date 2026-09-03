@@ -11,6 +11,8 @@ from time import monotonic, time_ns
 from typing import cast
 from uuid import uuid4
 
+from ._query import CurrentObservationQuery
+from ._sqlite_query import execute_current_observations
 from .errors import InvalidCatalogError, RefreshFailure, ScanFailure, StaleRefreshError, TaggingError
 from .filesystem import regular_files
 from .hashing import hash_file_stably
@@ -902,13 +904,7 @@ class Catalog:
         location = self._location_for_root(root)
         if location is None:
             return []
-        return self._observations_for_query(
-            """
-            WHERE scans.location_id = ? AND scans.id = locations.current_scan_id
-            ORDER BY observations.relative_path
-            """,
-            (location.id,),
-        )
+        return execute_current_observations(self._connection, CurrentObservationQuery(location=location))
 
     def search_current_files(
         self,

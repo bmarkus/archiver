@@ -182,14 +182,9 @@ Subject to the public naming review, typical use should be conceptually similar 
 ```python
 catalog.current(root)
 
-catalog.current(root) \
-    .filter(...) \
-    .sort(...) \
-    .limit(...)
+catalog.current(root).filter(...).sort(...).limit(...)
 
-catalog.duplicates(root) \
-    .sort(...) \
-    .limit(...)
+catalog.duplicates(root).sort(...).limit(...)
 ```
 
 Internally:
