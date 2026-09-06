@@ -8,6 +8,23 @@ from pathlib import PurePosixPath
 
 from ._query import CurrentObservationQuery
 from .models import ContentId, FileObservation
+from .query import (
+    _CurrentFileField,
+    _SortDirection,
+    _validate_path_glob_predicate,
+    _validate_sort_expression,
+)
+
+_ORDER_COLUMNS = {
+    _CurrentFileField.PATH: "observations.relative_path",
+    _CurrentFileField.SIZE: "observations.size_bytes",
+    _CurrentFileField.MTIME: "observations.mtime_ns",
+}
+
+_ORDER_DIRECTIONS = {
+    _SortDirection.ASCENDING: "ASC",
+    _SortDirection.DESCENDING: "DESC",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,8 +37,25 @@ class SqliteQuery:
 
 def compile_current_observations(query: CurrentObservationQuery) -> SqliteQuery:
     """Compile one current-observation description into parameterized SQLite."""
+    where_clauses = ["locations.id = ?", "scans.id = locations.current_scan_id"]
+    parameters: list[object] = [query.location.id]
+    for predicate in query.predicates:
+        _validate_path_glob_predicate(predicate)
+        where_clauses.append("observations.relative_path GLOB ?")
+        parameters.append(predicate.pattern)
+
+    _validate_sort_expression(query.ordering)
+    order_column = _ORDER_COLUMNS[query.ordering.field]
+    order_direction = _ORDER_DIRECTIONS[query.ordering.direction]
+    tie_breaker = "" if query.ordering.field is _CurrentFileField.PATH else ", observations.relative_path ASC"
+    limit_clause = ""
+    if query.limit is not None:
+        limit_clause = "LIMIT ?"
+        parameters.append(query.limit)
+
+    where_clause = " AND\n              ".join(where_clauses)
     return SqliteQuery(
-        statement="""
+        statement=f"""
             SELECT
                 observations.relative_path AS relative_path,
                 observations.size_bytes AS size_bytes,
@@ -32,11 +66,11 @@ def compile_current_observations(query: CurrentObservationQuery) -> SqliteQuery:
             JOIN scan_runs AS scans ON scans.id = observations.scan_id
             JOIN locations ON locations.id = scans.location_id
             JOIN content ON content.id = observations.content_id
-            WHERE locations.id = ?
-              AND scans.id = locations.current_scan_id
-            ORDER BY observations.relative_path ASC
+            WHERE {where_clause}
+            ORDER BY {order_column} {order_direction}{tie_breaker}
+            {limit_clause}
         """,
-        parameters=(query.location.id,),
+        parameters=tuple(parameters),
     )
 
 

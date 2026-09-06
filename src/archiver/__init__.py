@@ -34,6 +34,7 @@ from .models import (
     TagUsage,
     validate_tag_name,
 )
+from .query import CurrentFileQuery
 
 __all__ = [
     "AvailableTagSearch",
@@ -43,6 +44,7 @@ __all__ = [
     "ContentTagAssertion",
     "ContentTagView",
     "CurrentFileSearch",
+    "CurrentFileQuery",
     "CurrentFileSort",
     "CurrentFileTagView",
     "DuplicateGroupSearch",

@@ -23,6 +23,9 @@ The first implementation phase established the catalog foundation: content ident
 
 Incremental design and implementation history is preserved in the [plan archive](docs/plans/README.md).
 
+The supported public grammar for current-file queries is documented separately
+in the [current-file query grammar](docs/query-grammar.md).
+
 ## Catalog concepts
 
 A catalog is an index of files Archiver has observed. It records their content, where copies were found, their tags, and the history of successful scans. Cataloging describes files; it does not modify or manage them.

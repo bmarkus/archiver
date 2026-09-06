@@ -1,94 +1,49 @@
 # Design Evolution Notes
 
-This document records how the Archiver design evolved as the implementation grew.
+This document records how Archiver's read API has evolved. It explains why
+earlier choices made sense, what pressure those choices exposed, and why the
+project is introducing a query grammar in small, reviewable steps.
 
-The goal is not only to describe the final architecture, but to preserve the reasoning that led to it. Archiver is also an educational project, and many useful design lessons only become clear when we can see why an earlier solution was reasonable, where it started to strain, and what new abstraction became necessary.
+The account is intentionally historical. It does not treat the current design
+as inevitable, and it does not turn planned grammar features into promises.
 
-The first design deliberately started simple.
+## Start with concrete operations
 
-The catalog was modeled around a few clear domain ideas: files are observations at paths, content is identified independently from paths, scans preserve history, and the current state is derived from the latest successful scan. The API then exposed concrete operations for the questions we already knew how to ask.
+Archiver began with a small set of domain ideas: content is identified by bytes,
+file instances are observations at locations, scans preserve history, and a
+location's current state comes from its latest successful scan.
 
-This produced functions such as:
+The first API reflected the questions the catalog could already answer:
 
-```python
+~~~python
 search_current_files(...)
 search_duplicate_groups(...)
 search_content_by_tags(...)
-```
+~~~
 
-This approach had several advantages:
+This was a good starting point. Each operation had a clear purpose, direct SQL,
+and focused tests. More importantly, the project did not need to invent a
+general abstraction before it had evidence about the operations users needed.
 
-* each operation had a clear purpose;
-* the SQL could be written directly and optimized for that operation;
-* behavior was explicit and easy to test;
-* we did not need to invent abstractions before understanding the problem.
+Concrete APIs also made the domain boundaries visible. Paths describe
+observations and are scoped to locations; they are not content identity.
+Duplicate inspection is read-only. A failed scan cannot become current state.
+Those rules remain true regardless of how queries are represented.
 
-This was intentional. Early in a project, a general framework can easily encode the wrong assumptions. Implementing concrete use cases first allowed the actual query patterns and domain relationships to emerge from working code.
+## The pressure for a shared model
 
-As the catalog gained more capabilities, however, the API began to show a repeated pattern. New requirements were often not completely new operations. They were combinations of concepts that already existed: current state, path filtering, tags, sorting, grouping, counting, and aggregation.
+As the catalog grew, new read operations increasingly combined concepts that
+already existed: current state, path filtering, tags, sorting, grouping,
+counting, and aggregate values.
 
-For example, adding tag-aware file search produced a new function that was largely the existing file search plus tag filtering and tag output. Similar SQL relationships and query-building logic began appearing in several places.
+Tag-aware current-file search made the pattern clear. It resembled ordinary
+current-file search, with tag filtering and tag output added. Continuing this
+way would either create more specialized functions or consolidate them into
+large functions with many optional arguments.
 
-At this point there were two obvious ways to continue.
+A single all-purpose function might look like this:
 
-One was to keep adding specialized API functions. Another was to consolidate them into a few large functions with many optional arguments and conditional branches.
-
-Both approaches could work, but both would move the same growing complexity to different places.
-
-At the same time, many API functions were becoming tightly coupled to the physical SQL schema. A change to tables or relationships could therefore require modifications across several otherwise unrelated operations.
-
-This was the point where we stopped adding features and reconsidered the structure.
-
-The existing implementation had done its job: it had exposed enough real use cases to reveal a more general pattern. Continuing to tidy the API would risk spending effort organizing an interface whose underlying model was already changing.
-
-The emerging idea is to introduce a small query grammar between the public interfaces and SQL:
-
-```text
-CLI / domain API
-        ↓
-query grammar
-        ↓
-compiler
-        ↓
-SQL database
-```
-
-The grammar does not replace the lessons learned from the first implementation. It is built from them.
-
-The following sections document that transition step by step: what problem appeared, why the earlier solution was reasonable, what alternatives were considered, and why the project eventually chose a different structure.
-
-This document should continue to grow in the same way as the project itself. Each major design change can be added as another short story rather than rewriting the history to make the final architecture look inevitable.
-
-
-# Why the API Moved Toward a Query Grammar
-
-The first catalog API was built in the simplest possible way: add a function for each useful operation.
-
-For example:
-
-```python
-search_current_files(...)
-search_current_files_with_tags(...)
-search_content_by_tags(...)
-search_available_tags(...)
-search_duplicate_groups(...)
-```
-
-This worked well at first. Each function was explicit, easy to test, and safe.
-
-## The first problem: similar functions started multiplying
-
-`search_current_files()` and `search_current_files_with_tags()` are a good example.
-
-The second function is mostly the first one plus:
-
-* filtering by tags;
-* choosing `all` or `any` tag matching;
-* optionally returning tag information.
-
-This raised an obvious question: why create another function? We could instead keep one large API:
-
-```python
+~~~python
 file_search(
     root=...,
     glob=...,
@@ -98,235 +53,96 @@ file_search(
     include_tags=True,
     sort_by=...,
 )
-```
+~~~
 
-This avoids having many functions.
+That reduces the number of method names, but it does not reduce complexity.
+The combinations of options still need clear semantics, validation, and tests.
+The complexity merely moves into conditionals inside one method.
 
-But the complexity has only moved inside the function:
+The implementation also had another source of duplication: several public
+operations contained table names, joins, grouping rules, and SQL ordering. A
+schema or relationship change could therefore touch several unrelated API
+methods. The relational work cannot disappear, but it can have one well-defined
+home.
 
-```python
-if tags:
-    ...
+## Introduce a typed query boundary
 
-if tag_match == "all":
-    ...
+The emerging structure is:
 
-if provenance:
-    ...
-
-if include_tags:
-    ...
-
-if sort_by == "size":
-    ...
-```
-
-As new features are added, the difficult part becomes the interaction between all these options.
-
-So there are two forms of the same problem:
-
-```text
-many small API functions
-        or
-few very large functions with many conditionals
-```
-
-## The second problem: API functions know too much SQL
-
-Many catalog functions directly contain table names, joins, CTEs, grouping rules, and column names.
-
-That means a database-schema change can require changes in many unrelated API functions.
-
-For example, adding tag filtering to a file search requires understanding:
-
-```text
-file observation
-      ↓
-content
-      ↓
-tag assertion
-      ↓
-tag
-```
-
-This relationship has to be implemented somewhere whether or not we use a grammar.
-
-The important question is therefore not:
-
-> Can we avoid this complexity?
-
-We cannot.
-
-The better question is:
-
-> Where should this complexity live?
-
-A compiler gives it one home.
-
-```text
-API / CLI
-    ↓
-query description
-    ↓
+~~~text
+CLI and domain API
+        ↓
+typed query description
+        ↓
 compiler
-    ↓
-SQL schema
-```
+        ↓
+SQLite database
+~~~
 
-The user can write:
+A query description expresses catalog semantics, not SQL fragments, column
+names, or arbitrary Python callbacks. The compiler translates validated
+descriptions into parameterized SQLite queries and materializes the resulting
+domain objects.
 
-```python
-tags.has("picture")
-```
+This boundary has two benefits. Public code composes familiar domain vocabulary,
+while database details remain behind the compiler. It also gives the project one
+place to define ordering, bounds, result shape, and safety rules.
 
-while the compiler decides whether that requires `EXISTS`, a join, a CTE, or another strategy.
+The boundary does not replace the domain API. Catalog methods remain useful as
+semantic starting points. They create a query for a particular domain, while the
+query grammar supplies the reusable transformations.
 
-## The grammar idea
+## The grammar available today
 
-Instead of creating functions for combinations of features, define a few reusable query operations:
+Plans 004.1 and 004.2 established the first small slice of this design:
+current file observations for one root.
 
-```python
-q = (
-    catalog.files(root)
-    .where(path.glob("photos/**"))
-    .where(tags.has_all("family", "picture"))
-    .sort(size.desc())
-)
-```
+~~~python
+from archiver.query import path, size
 
-The query is lazy. It only describes what should happen.
+query = catalog.files(root)
+query = query.where(path.glob("photos/*.jpg"))
+query = query.sort(size.desc())
+query = query.limit(20)
+rows = query.fetch()
+~~~
 
-The compiler later turns that description into SQL.
+This is intentionally limited. The current public grammar supports path GLOB
+filtering, path, size, and modification-time ordering, positive limits, and bounded
+fetching. Queries are immutable and lazy: each transformation returns a new
+description, and fetch() resolves the root's latest successful scan.
 
-New requirements usually add new vocabulary rather than new API functions.
+The [current-file query grammar](docs/query-grammar.md) is the public usage
+reference. [Plan 004](docs/plans/004-query-grammar-and-api-refactor.md) records
+the implementation sequence and architectural constraints.
 
-When tags are introduced, for example, we add:
+## Why result shape matters
 
-```python
-tags.has(...)
-tags.has_all(...)
-tags.has_any(...)
-```
+The current grammar preserves the meaning of a row: it returns file
+observations. Some future catalog questions will have a different result shape.
 
-plus the compiler rules needed to implement them.
+For example, duplicate inspection groups observations by content identity.
+A duplicate-group result may contain a content identity, copy count, and
+aggregate byte count, while an individual relative path is no longer the
+primary result. A future grouped query therefore needs its own typed result
+domain and must reject operations that do not apply to that domain.
 
-`where()`, `sort()`, `fetch()`, and the rest of the query machinery do not need to change.
+This is one reason the grammar is being added gradually. Grouping, aggregation,
+historical observations, tag predicates, and additional materialization
+operations each need semantics that are specific enough to preserve the
+catalog's invariants. They are not just new SQL clauses.
 
-## Aggregation changes what a result means
+## Keep the design incremental
 
-Some operations are different because they change the meaning of a row.
+The lesson is not that the early specialized APIs were wrong. They revealed the
+actual patterns and constraints that a more general interface must respect.
 
-For example:
+The query grammar should grow only when existing behavior provides a concrete
+reason to add vocabulary. Each subplan can then define its public API, result
+types, ordering, bounds, compiler behavior, tests, and compatibility story
+without pretending to design the complete language in advance.
 
-```python
-catalog.files(root)
-```
-
-represents files.
-
-But:
-
-```python
-(
-    catalog.files(root)
-    .group_by(content)
-    .summarize(
-        copies=count(),
-        redundant_bytes=(count() - 1) * size,
-    )
-)
-```
-
-represents duplicate-content groups.
-
-After that operation, fields such as:
-
-```text
-content
-copies
-redundant_bytes
-```
-
-exist, while `path` may no longer make sense.
-
-The query object can carry this information as metadata and reject invalid operations.
-
-## Why still keep an API?
-
-A completely open grammar is powerful, but it also makes it easy to write nonsense or accidentally rebuild important domain concepts incorrectly.
-
-So useful operations can still have safe wrappers:
-
-```python
-q = catalog.duplicates(root)
-```
-
-Internally this wrapper is only a predefined grammar expression. It contains no special SQL.
-
-The important difference is that it still returns a query object.
-
-For example:
-
-```python
-q = catalog.duplicates(root)
-
-q.fields
-# content
-# copies
-# size
-# redundant_bytes
-```
-
-The result can then be extended safely:
-
-```python
-q.where(redundant_bytes > 1_000_000)
-q.sort(redundant_bytes.desc())
-q.sum(redundant_bytes)
-```
-
-while something meaningless can be rejected:
-
-```python
-q.sort(path)
-# error: path is not available for duplicate groups
-```
-
-This example is a strong reason not to spend too much effort merely tidying the existing API.
-
-A cleaned-up API would still eventually need to represent:
-
-* composable operations;
-* changing result shapes;
-* available fields;
-* validation;
-* schema-independent SQL generation.
-
-At that point we would be slowly rebuilding a grammar anyway.
-
-## Resulting structure
-
-The emerging design is therefore:
-
-```text
-CLI
-    constrained, user-friendly commands
-
-Domain API
-    safe wrappers such as duplicates()
-
-Query grammar
-    reusable composition and validation
-
-Compiler
-    translates domain expressions into SQL
-
-Database
-    physical schema
-```
-
-The lesson from the first implementation is not that specialized APIs were a mistake. They were the simplest way to discover the real requirements.
-
-Their growth revealed the deeper structure of the problem.
-
-Once that structure became visible, moving directly to a grammar became more useful than continuing to reorganize an API whose complexity would otherwise keep reappearing in new forms.
+That approach keeps Archiver's central promises intact: content identity remains
+independent of paths, current state comes from successful scans, queries are
+read-only, and catalog results stay deterministic and bounded where their
+interface requires it.

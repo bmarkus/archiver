@@ -57,14 +57,14 @@ Predicates and sort expressions must be typed and validated. Calling order and l
 
 ### Domain API
 
-`Catalog` provides a small number of semantic query constructors. Provisional examples are:
+`Catalog` provides a small number of semantic query constructors. The current-file constructor established by Plan 004.2 and the provisional duplicate constructor are:
 
 ```python
-catalog.current(root)
+catalog.files(root)
 catalog.duplicates(root)
 ```
 
-These names remain illustrative until the public API subplan approves them. In particular, `current` must be evaluated beside `current_scan()` and `current_summary()`.
+`files` means current file observations scoped to one root; historical observations remain a distinct query domain. The duplicate constructor remains illustrative until its subplan approves it.
 
 Semantic constructors should compose the shared query representation. A useful combination of existing operations should normally not require another `Catalog` method; new methods should represent genuine domain concepts.
 
@@ -135,13 +135,13 @@ Introduce the minimal immutable internal query representation and the boundary b
 
 ### 004.2 — Current Observation API
 
-Introduce the public current-observation query constructor and only the smallest useful typed row-preserving vocabulary needed to replace basic current-file search.
+Introduce `Catalog.files(root)`, typed path/sort expressions, immutable `where`/`sort`/`limit` transformations, and one bounded `fetch()` terminal needed to make the first public query useful.
 
 **Completion goal:** existing current-file filtering, sorting, and bounding can be expressed through the public query API.
 
 ### 004.3 — Materialization and Reductions
 
-Define bounded collection, streaming where applicable, first-result behavior, counts, and simple totals. Specify lazy execution, catalog lifetime, query reuse, ordering, and unbounded-consumption rules.
+Expand materialization beyond the bounded `fetch()` established in 004.2. Define first-result behavior, counts, simple totals, streaming where applicable, and explicit unbounded-consumption rules.
 
 **Completion goal:** one filtered query can support existing materializations without specialized search-result engines.
 
@@ -180,9 +180,9 @@ Refactor the CLI to construct queries through the approved public grammar while 
 Subject to the public naming review, typical use should be conceptually similar to:
 
 ```python
-catalog.current(root)
+catalog.files(root)
 
-catalog.current(root).filter(...).sort(...).limit(...)
+catalog.files(root).where(...).sort(...).limit(...).fetch()
 
 catalog.duplicates(root).sort(...).limit(...)
 ```

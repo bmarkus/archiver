@@ -28,5 +28,6 @@ Each subplan must identify its parent plan and include created, implementation, 
 | 003.3b | [Tag-Aware Current-File Search](003.3b-tag-aware-file-and-content-cli.md) | Implemented (approved) | 003.3 | End-to-end tag-aware current-file API and compatible `catalog files` CLI. |
 | 003.3c | [Available Tag Vocabulary](003.3c-tag-vocabulary-cli.md) | Implemented (approved) | 003.3 | End-to-end active vocabulary usage API and `tags available` CLI. |
 | 004 | [Query Grammar and API Refactor](004-query-grammar-and-api-refactor.md) | Approved | - | Incremental typed query grammar and one compiled read-query architecture. |
-| 004.1 | [Query Foundation](004.1-query-foundation.md) | Implemented (pending review) | 004 | Minimal immutable query description, SQLite compilation, and execution boundary for `current_files()`. |
+| 004.1 | [Query Foundation](004.1-query-foundation.md) | Implemented (approved) | 004 | Minimal immutable query description, SQLite compilation, and execution boundary for `current_files()`. |
+| 004.2 | [Current Observation API](004.2-current-observation-api.md) | Implemented (pending review) | 004 | Public bounded current-file query with typed path, sort, and limit expressions. |
 
