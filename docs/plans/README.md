@@ -2,7 +2,7 @@
 
 Plans record the evolution of Archiver's design and implementation.
 
-**Active plan:** [004.3 — Materialization and Reductions](004.3-materialization-and-reductions.md)
+**Active plan:** [004.4 — Grouped Queries and Duplicates](004.4-grouped-queries-and-duplicates.md)
 
 ## Numbering
 
@@ -32,5 +32,5 @@ Each subplan must identify its parent plan and include created, implementation, 
 | 004 | [Query Grammar and API Refactor](004-query-grammar-and-api-refactor.md) | Approved | - | Incremental typed query grammar and one compiled read-query architecture. |
 | 004.1 | [Query Foundation](004.1-query-foundation.md) | Implemented (approved) | 004 | Minimal immutable query description, SQLite compilation, and execution boundary for `current_files()`. |
 | 004.2 | [Current Observation API](004.2-current-observation-api.md) | Implemented (approved) | 004 | Public bounded current-file query with typed path, sort, and limit expressions. |
-| 004.3 | [Materialization and Reductions](004.3-materialization-and-reductions.md) | Implemented (pending review) | 004 | Current-file terminals, complete reductions, bounded streaming, and explicit unbounded streaming. |
-
+| 004.3 | [Materialization and Reductions](004.3-materialization-and-reductions.md) | Implemented (approved) | 004 | Current-file terminals, complete reductions, bounded streaming, and explicit unbounded streaming. |
+| 004.4 | [Grouped Queries and Duplicates](004.4-grouped-queries-and-duplicates.md) | Approved (active) | 004 | Bounded current duplicate groups with complete summaries and member expansion; retire the Phase 1 duplicate query facade. |

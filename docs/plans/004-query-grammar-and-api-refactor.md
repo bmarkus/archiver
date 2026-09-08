@@ -115,7 +115,7 @@ This read/query refactor preserves:
 - mutation APIs and transaction behavior;
 - existing CLI selection, bounds, summaries, and deterministic output unless a subplan explicitly approves a visible change.
 
-Existing methods may first delegate to the grammar as compatibility wrappers. Removing, renaming, or incompatibly changing a public API requires an explicit decision in the public API cleanup subplan, including a deprecation or versioning policy. One internal architecture does not itself authorize a breaking public change.
+Existing methods may first delegate to the grammar as compatibility wrappers. Removing, renaming, or incompatibly changing a public API requires an explicit decision in an approved subplan, normally the public API cleanup subplan, including a deprecation or versioning policy where appropriate. Plan 004.4 explicitly retires the Phase 1 duplicate query facade and its tuple-oriented pandas adapter rather than retaining parallel public shapes around the new grouped query. One internal architecture does not itself authorize any other breaking public change.
 
 ## Schema and safety boundary
 
@@ -149,6 +149,12 @@ Expand materialization beyond the bounded `fetch()` established in 004.2. Define
 
 Introduce the first grain-changing operation, using duplicate inspection to define group predicates, computed values, complete summaries, bounded groups, and bounded member expansion.
 
+Retire the Phase 1 `duplicate_groups()`, `search_duplicate_groups()`, and
+`duplicate_summary()` methods, their composite search result, and the
+tuple-oriented duplicate DataFrame adapter rather than retaining parallel
+public shapes around the grouped query. Map the duplicate CLI directly to the
+new query in this subplan while preserving its output.
+
 **Completion goal:** duplicate inspection is expressed through the grammar without a separate implementation path.
 
 ### 004.5 — Tag Predicates
@@ -172,6 +178,9 @@ Approve the long-term public surface and compatibility policy. Document catalog 
 ### 004.8 — CLI Mapping
 
 Refactor the CLI to construct queries through the approved public grammar while preserving its bounded user interface. The CLI need not expose every grammar operation.
+
+The duplicate CLI is migrated with Plan 004.4 because that subplan retires its
+specialized catalog facade. This subplan maps the remaining CLI reads.
 
 **Completion goal:** CLI query behavior derives from the same model as the Python API.
 
