@@ -12,7 +12,12 @@ from typing import cast
 from uuid import uuid4
 
 from ._query import CurrentObservationQuery
-from ._sqlite_query import execute_current_observations
+from ._sqlite_query import (
+    execute_current_observation_count,
+    execute_current_observation_total_size,
+    execute_first_current_observation,
+    iter_current_observations,
+)
 from .errors import InvalidCatalogError, RefreshFailure, ScanFailure, StaleRefreshError, TaggingError
 from .filesystem import regular_files
 from .hashing import hash_file_stably
@@ -902,10 +907,7 @@ class Catalog:
 
     def current_files(self, root: Path) -> list[FileObservation]:
         """Return the current files for one location in relative-path order."""
-        location = self._location_for_root(root)
-        if location is None:
-            return []
-        return execute_current_observations(self._connection, CurrentObservationQuery(location=location))
+        return list(self.files(root).stream_all())
 
     def files(self, root: Path) -> CurrentFileQuery:
         """Create a lazy, bounded query over one root's current observations.
@@ -918,16 +920,37 @@ class Catalog:
         return CurrentFileQuery(root=self._canonical_root(root), _catalog=self)
 
     def _fetch_current_file_query(self, query: CurrentFileQuery) -> tuple[FileObservation, ...]:
+        return tuple(self._stream_current_file_query(query, limit=query.row_limit))
+
+    def _first_current_file_query(self, query: CurrentFileQuery) -> FileObservation | None:
+        internal_query = self._current_observation_query(query, limit=None)
+        return None if internal_query is None else execute_first_current_observation(self._connection, internal_query)
+
+    def _count_current_file_query(self, query: CurrentFileQuery) -> int:
+        internal_query = self._current_observation_query(query, limit=None)
+        return 0 if internal_query is None else execute_current_observation_count(self._connection, internal_query)
+
+    def _total_size_current_file_query(self, query: CurrentFileQuery) -> int:
+        internal_query = self._current_observation_query(query, limit=None)
+        return 0 if internal_query is None else execute_current_observation_total_size(self._connection, internal_query)
+
+    def _stream_current_file_query(self, query: CurrentFileQuery, *, limit: int | None) -> Iterator[FileObservation]:
+        internal_query = self._current_observation_query(query, limit=limit)
+        if internal_query is not None:
+            yield from iter_current_observations(self._connection, internal_query)
+
+    def _current_observation_query(
+        self, query: CurrentFileQuery, *, limit: int | None
+    ) -> CurrentObservationQuery | None:
         location = self._location_for_canonical_root(query.root)
         if location is None:
-            return ()
-        internal_query = CurrentObservationQuery(
+            return None
+        return CurrentObservationQuery(
             location=location,
             predicates=query.predicates,
             ordering=query.ordering,
-            limit=query.row_limit,
+            limit=limit,
         )
-        return tuple(execute_current_observations(self._connection, internal_query))
 
     def search_current_files(
         self,
@@ -942,33 +965,16 @@ class Catalog:
         if limit < 1:
             raise ValueError("limit must be at least 1")
         query = self.files(root)
-        location = self._location_for_canonical_root(query.root)
-        if location is None:
+        if self._location_for_canonical_root(query.root) is None:
             return CurrentFileSearch(files=(), total_matches=0, total_size_bytes=0)
 
         query = query.sort(self._current_file_query_order(sort_by, reverse)).limit(limit)
-        where_clause = "WHERE scans.location_id = ? AND scans.id = locations.current_scan_id"
-        parameters: list[object] = [location.id]
         if path_glob is not None:
-            where_clause += " AND observations.relative_path GLOB ?"
-            parameters.append(path_glob)
             query = query.where(path.glob(path_glob))
-
-        count_row = self._connection.execute(
-            f"""
-            SELECT COUNT(*) AS total_matches, COALESCE(SUM(observations.size_bytes), 0) AS total_size_bytes
-            FROM file_observations AS observations
-            JOIN scan_runs AS scans ON scans.id = observations.scan_id
-            JOIN locations ON locations.id = scans.location_id
-            {where_clause}
-            """,
-            parameters,
-        ).fetchone()
-        assert count_row is not None
         return CurrentFileSearch(
             files=query.fetch(),
-            total_matches=int(count_row["total_matches"]),
-            total_size_bytes=int(count_row["total_size_bytes"]),
+            total_matches=query.count(),
+            total_size_bytes=query.total_size_bytes(),
         )
 
     def search_current_files_with_tags(

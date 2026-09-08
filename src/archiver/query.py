@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
@@ -157,6 +158,36 @@ class CurrentFileQuery:
         persisted location or successful scan returns an empty tuple.
         """
         return self._catalog._fetch_current_file_query(self)
+
+    def first(self) -> FileObservation | None:
+        """Return the first matching observation under this query's ordering."""
+        return self._catalog._first_current_file_query(self)
+
+    def count(self) -> int:
+        """Return the complete number of matching current observations.
+
+        This reduction ignores the query's display limit.
+        """
+        return self._catalog._count_current_file_query(self)
+
+    def total_size_bytes(self) -> int:
+        """Return the complete logical size of matching current observations.
+
+        This reduction ignores the query's display limit.
+        """
+        return self._catalog._total_size_current_file_query(self)
+
+    def stream(self) -> Iterator[FileObservation]:
+        """Yield at most this query's bound in deterministic order."""
+        return self._catalog._stream_current_file_query(self, limit=self.row_limit)
+
+    def stream_all(self) -> Iterator[FileObservation]:
+        """Yield every matching observation in deterministic order.
+
+        This is deliberately the explicit unbounded terminal; use fetch() or
+        stream() for bounded consumption.
+        """
+        return self._catalog._stream_current_file_query(self, limit=None)
 
 
 def _validate_path_glob_predicate(predicate: object) -> None:

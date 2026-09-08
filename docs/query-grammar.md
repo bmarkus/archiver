@@ -102,7 +102,7 @@ preview = catalog.files(root).where(path.glob("*.txt")).sort(size.asc()).limit(1
 limit() accepts only positive integers. The result bound is applied before
 observations are materialized.
 
-## Fetching results
+## Terminals
 
 Call fetch() with no arguments to materialize the query:
 
@@ -118,10 +118,45 @@ a query created before a root is scanned can be fetched after a later successful
 scan. A valid root that has never been scanned, or is not known to the catalog,
 returns an empty tuple.
 
+Use `first()` for one ordered result without materializing a page. It returns a
+`FileObservation` or `None` when no row matches. `count()` and
+`total_size_bytes()` return the complete number and logical size of matching
+current observations; neither reduction is affected by `limit()`.
+
+```python
+first_row = preview.first()
+match_count = preview.count()
+total_bytes = preview.total_size_bytes()
+```
+
+`stream()` yields typed observations in the query's deterministic order and
+honors its positive bound. It holds an SQLite cursor while it is consumed, so
+the catalog must remain open until iteration finishes or the iterator is
+closed.
+
+```python
+for row in preview.stream():
+    print(row.relative_path)
+```
+
+`stream_all()` is the deliberate unbounded terminal. It keeps filtering and
+ordering but removes the row bound. It is appropriate only when the caller
+intends to consume every matching observation; there is no `fetch_all()`.
+
+```python
+for row in preview.stream_all():
+    archive_every_row(row)
+```
+
+Each terminal resolves current state independently. If a scan changes the
+catalog between terminals, separate calls may observe different successful
+current scans; queries do not create snapshots.
+
 ## Current boundary
 
 The current grammar supports path GLOB filtering; path, size, and modification
-time ordering; positive limits; and bounded fetching. It does not yet support
-size or time predicates, content or tag predicates, OR or NOT composition,
-projection, aggregation, pagination, streaming, or historical-observation
+time ordering; positive limits; bounded fetching and streaming; explicit
+unbounded streaming; and complete count and size reductions. It does not yet
+support size or time predicates, content or tag predicates, OR or NOT
+composition, projection, grouping, pagination, or historical-observation
 queries.

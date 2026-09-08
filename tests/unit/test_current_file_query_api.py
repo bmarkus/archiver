@@ -7,7 +7,11 @@ import pytest
 
 from archiver import Catalog, CurrentFileQuery
 from archiver._query import CurrentObservationQuery
-from archiver._sqlite_query import compile_current_observations
+from archiver._sqlite_query import (
+    compile_current_observation_count,
+    compile_current_observation_total_size,
+    compile_current_observations,
+)
 from archiver.models import Location
 from archiver.query import PathGlobPredicate, SortExpression, mtime, path, size
 
@@ -107,3 +111,24 @@ def test_path_order_does_not_add_a_conflicting_tie_breaker(tmp_path: Path) -> No
 
     assert "ORDER BY observations.relative_path DESC" in compiled.statement
     assert "relative_path ASC" not in compiled.statement
+
+
+def test_reduction_compilers_ignore_row_order_and_limit(tmp_path: Path) -> None:
+    location = Location(id=42, root=tmp_path / "source")
+    query = CurrentObservationQuery(
+        location=location,
+        predicates=(path.glob("nested/*.txt"),),
+        ordering=mtime.desc(),
+        limit=5,
+    )
+
+    count = compile_current_observation_count(query)
+    total_size = compile_current_observation_total_size(query)
+
+    for compiled in (count, total_size):
+        assert compiled.parameters == (42, "nested/*.txt")
+        assert "ORDER BY" not in compiled.statement
+        assert "LIMIT" not in compiled.statement
+        assert "observations.relative_path GLOB ?" in compiled.statement
+    assert "COUNT(*) AS count" in count.statement
+    assert "COALESCE(SUM(observations.size_bytes), 0) AS total_size_bytes" in total_size.statement
