@@ -11,10 +11,12 @@ from time import monotonic, time_ns
 from typing import cast
 from uuid import uuid4
 
-from ._query import CurrentObservationQuery
+from ._query import CurrentObservationQuery, DuplicateGroupQueryDescription
 from ._sqlite_query import (
     execute_current_observation_count,
     execute_current_observation_total_size,
+    execute_duplicate_groups,
+    execute_duplicate_summary,
     execute_first_current_observation,
     iter_current_observations,
 )
@@ -30,7 +32,6 @@ from .models import (
     CurrentFileSearch,
     CurrentFileSort,
     CurrentFileTagView,
-    DuplicateGroupSearch,
     DuplicateGroupView,
     DuplicateSummary,
     FileObservation,
@@ -52,7 +53,7 @@ from .models import (
     TagUsage,
     validate_tag_name,
 )
-from .query import CurrentFileQuery, SortExpression, mtime, path, size
+from .query import CurrentFileQuery, DuplicateGroupQuery, SortExpression, mtime, path, size
 
 SCHEMA_VERSION = 2
 _TAG_NAME_REGEX_FUNCTION = "archiver_tag_name_regex"
@@ -1160,32 +1161,36 @@ class Catalog:
             (location.id, content_id.algorithm, content_id.digest),
         )
 
-    def duplicate_groups(self, root: Path) -> list[tuple[FileObservation, ...]]:
-        """Return current duplicate-content groups at one location, deterministically ordered."""
-        location = self._location_for_root(root)
-        if location is None:
-            return []
-        # Equal content IDs must be contiguous so the loop below can form groups in one pass.
-        observations = self._observations_for_query(
-            """
-            WHERE scans.location_id = ? AND scans.id = locations.current_scan_id
-            ORDER BY content.algorithm, content.digest, observations.relative_path
-            """,
-            (location.id,),
+    def duplicates(self, root: Path) -> DuplicateGroupQuery:
+        """Create a lazy, bounded query over one root's current duplicate groups."""
+        return DuplicateGroupQuery(root=self._canonical_root(root), _catalog=self)
+
+    def _fetch_duplicate_group_query(self, query: DuplicateGroupQuery) -> tuple[DuplicateGroupView, ...]:
+        internal_query = self._duplicate_group_query(query)
+        return () if internal_query is None else execute_duplicate_groups(self._connection, internal_query)
+
+    def _summarize_duplicate_group_query(self, query: DuplicateGroupQuery) -> DuplicateSummary:
+        internal_query = self._duplicate_group_query(query)
+        return (
+            DuplicateSummary(0, 0, 0)
+            if internal_query is None
+            else execute_duplicate_summary(self._connection, internal_query)
         )
-        groups: list[tuple[FileObservation, ...]] = []
-        current_group: list[FileObservation] = []
-        current_content: ContentId | None = None
-        for observation in observations:
-            if observation.content_id != current_content:
-                if len(current_group) > 1:
-                    groups.append(tuple(current_group))
-                current_group = []
-                current_content = observation.content_id
-            current_group.append(observation)
-        if len(current_group) > 1:
-            groups.append(tuple(current_group))
-        return groups
+
+    def _duplicate_group_query(self, query: DuplicateGroupQuery) -> DuplicateGroupQueryDescription | None:
+        location = self._location_for_canonical_root(query.root)
+        if location is None:
+            return None
+        assert location.id is not None
+        scan_id = self._current_scan_id(location.id)
+        if scan_id is None:
+            return None
+        return DuplicateGroupQueryDescription(
+            location=location,
+            scan_id=scan_id,
+            group_limit=query.group_limit,
+            member_limit=query.member_row_limit,
+        )
 
     def current_scan(self, root: Path) -> ScanRun | None:
         """Return the most recent successful scan for one location, if one exists."""
@@ -1213,98 +1218,6 @@ class Catalog:
         """Return the summary for the current successful scan, if one exists."""
         current_scan = self.current_scan(root)
         return None if current_scan is None else self._scan_summary(current_scan.id)
-
-    def duplicate_summary(self, root: Path) -> DuplicateSummary:
-        """Return aggregate duplicate metrics for a location's current successful scan."""
-        current_scan = self.current_scan(root)
-        if current_scan is None:
-            return DuplicateSummary(
-                duplicate_content_group_count=0,
-                duplicate_file_instance_count=0,
-                potential_redundant_bytes=0,
-            )
-        row = self._connection.execute(
-            """
-            SELECT
-                COUNT(*) AS duplicate_content_group_count,
-                COALESCE(SUM(copy_count), 0) AS duplicate_file_instance_count,
-                COALESCE(SUM((copy_count - 1) * size_bytes), 0) AS potential_redundant_bytes
-            FROM (
-                SELECT content_id, MAX(size_bytes) AS size_bytes, COUNT(*) AS copy_count
-                FROM file_observations
-                WHERE scan_id = ?
-                GROUP BY content_id
-                HAVING COUNT(*) > 1
-            )
-            """,
-            (current_scan.id,),
-        ).fetchone()
-        assert row is not None
-        return DuplicateSummary(
-            duplicate_content_group_count=int(row["duplicate_content_group_count"]),
-            duplicate_file_instance_count=int(row["duplicate_file_instance_count"]),
-            potential_redundant_bytes=int(row["potential_redundant_bytes"]),
-        )
-
-    def search_duplicate_groups(
-        self,
-        root: Path,
-        *,
-        group_limit: int = 20,
-        member_limit: int = 20,
-    ) -> DuplicateGroupSearch:
-        """Return bounded duplicate groups and complete aggregate metrics."""
-        if group_limit < 1:
-            raise ValueError("group_limit must be at least 1")
-        if member_limit < 1:
-            raise ValueError("member_limit must be at least 1")
-        location = self._location_for_root(root)
-        if location is None:
-            return DuplicateGroupSearch(groups=(), summary=DuplicateSummary(0, 0, 0))
-        current_scan = self.current_scan(root)
-        if current_scan is None:
-            return DuplicateGroupSearch(groups=(), summary=DuplicateSummary(0, 0, 0))
-
-        summary = self.duplicate_summary(root)
-        group_rows = self._connection.execute(
-            """
-            SELECT
-                content.id AS content_database_id,
-                content.algorithm AS algorithm,
-                content.digest AS digest,
-                content.size_bytes AS size_bytes,
-                COUNT(*) AS file_instance_count,
-                (COUNT(*) - 1) * content.size_bytes AS potential_redundant_bytes
-            FROM file_observations AS observations
-            JOIN content ON content.id = observations.content_id
-            WHERE observations.scan_id = ?
-            GROUP BY content.id, content.algorithm, content.digest, content.size_bytes
-            HAVING COUNT(*) > 1
-            ORDER BY potential_redundant_bytes DESC, content.algorithm, content.digest
-            LIMIT ?
-            """,
-            (current_scan.id, group_limit),
-        ).fetchall()
-        groups = tuple(
-            DuplicateGroupView(
-                content_id=ContentId(algorithm=str(row["algorithm"]), digest=str(row["digest"])),
-                size_bytes=int(row["size_bytes"]),
-                file_instance_count=int(row["file_instance_count"]),
-                potential_redundant_bytes=int(row["potential_redundant_bytes"]),
-                members=tuple(
-                    self._observations_for_query(
-                        """
-                        WHERE scans.id = ? AND observations.content_id = ?
-                        ORDER BY observations.relative_path
-                        LIMIT ?
-                        """,
-                        (current_scan.id, int(row["content_database_id"]), member_limit),
-                    )
-                ),
-            )
-            for row in group_rows
-        )
-        return DuplicateGroupSearch(groups=groups, summary=summary)
 
     def scan_history(self) -> Iterator[ScanRun]:
         """Yield every scan run in deterministic location-root and scan-ID order.

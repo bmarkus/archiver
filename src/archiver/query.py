@@ -8,7 +8,7 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Self
 
-from .models import FileObservation
+from .models import DuplicateGroupView, DuplicateSummary, FileObservation
 
 if TYPE_CHECKING:
     from .catalog import Catalog
@@ -190,6 +190,40 @@ class CurrentFileQuery:
         return self._catalog._stream_current_file_query(self, limit=None)
 
 
+@dataclass(frozen=True, slots=True)
+class DuplicateGroupQuery:
+    """An immutable, lazy, bounded query for current duplicate groups."""
+
+    root: Path
+    group_limit: int = 20
+    member_row_limit: int = 20
+    _catalog: Catalog = field(repr=False, compare=False, kw_only=True)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.root, Path) or not self.root.is_absolute():
+            raise ValueError("a duplicate-group query requires a canonical absolute root")
+        _validate_limit(self.group_limit)
+        _validate_limit(self.member_row_limit)
+
+    def limit(self, count: int) -> Self:
+        """Return a query with a replacement positive group bound."""
+        _validate_limit(count)
+        return replace(self, group_limit=count)
+
+    def member_limit(self, count: int) -> Self:
+        """Return a query with a replacement positive member bound per group."""
+        _validate_limit(count)
+        return replace(self, member_row_limit=count)
+
+    def fetch(self) -> tuple[DuplicateGroupView, ...]:
+        """Materialize bounded duplicate groups from one resolved current scan."""
+        return self._catalog._fetch_duplicate_group_query(self)
+
+    def summary(self) -> DuplicateSummary:
+        """Return complete duplicate metrics independent of display bounds."""
+        return self._catalog._summarize_duplicate_group_query(self)
+
+
 def _validate_path_glob_predicate(predicate: object) -> None:
     if type(predicate) is not PathGlobPredicate:
         raise TypeError("where() requires a path GLOB predicate")
@@ -217,6 +251,7 @@ def _validate_limit(count: object) -> None:
 
 __all__ = [
     "CurrentFileQuery",
+    "DuplicateGroupQuery",
     "PathGlobPredicate",
     "SortExpression",
     "mtime",

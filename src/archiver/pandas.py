@@ -18,12 +18,6 @@ _CURRENT_FILES_COLUMNS = (
     "mtime_ns",
 )
 
-_DUPLICATE_GROUPS_COLUMNS = (
-    "group_id",
-    "group_size",
-    *_CURRENT_FILES_COLUMNS,
-)
-
 _OBSERVATION_HISTORY_COLUMNS = (
     "scan_id",
     "scan_status",
@@ -57,26 +51,6 @@ def current_files_frame(observations: Iterable[FileObservation]) -> pd.DataFrame
         for observation in observations
     ]
     return pd.DataFrame(records, columns=_CURRENT_FILES_COLUMNS)
-
-
-def duplicate_groups_frame(groups: Iterable[tuple[FileObservation, ...]]) -> pd.DataFrame:
-    """Materialize duplicate groups as a flat pandas DataFrame."""
-    records = [
-        {
-            "group_id": group_id,
-            "group_size": len(group),
-            "location_id": observation.location.id,
-            "root_path": str(observation.location.root),
-            "relative_path": observation.relative_path.as_posix(),
-            "algorithm": observation.content_id.algorithm,
-            "digest": observation.content_id.digest,
-            "size_bytes": observation.size_bytes,
-            "mtime_ns": observation.mtime_ns,
-        }
-        for group_id, group in enumerate(groups, start=1)
-        for observation in group
-    ]
-    return pd.DataFrame(records, columns=_DUPLICATE_GROUPS_COLUMNS)
 
 
 def observation_history_frame(observations: Iterable[HistoricalObservation]) -> pd.DataFrame:

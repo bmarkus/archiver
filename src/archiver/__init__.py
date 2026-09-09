@@ -11,7 +11,6 @@ from .models import (
     CurrentFileSearch,
     CurrentFileSort,
     CurrentFileTagView,
-    DuplicateGroupSearch,
     DuplicateGroupView,
     DuplicateSummary,
     FileObservation,
@@ -34,7 +33,7 @@ from .models import (
     TagUsage,
     validate_tag_name,
 )
-from .query import CurrentFileQuery
+from .query import CurrentFileQuery, DuplicateGroupQuery
 
 __all__ = [
     "AvailableTagSearch",
@@ -47,7 +46,7 @@ __all__ = [
     "CurrentFileQuery",
     "CurrentFileSort",
     "CurrentFileTagView",
-    "DuplicateGroupSearch",
+    "DuplicateGroupQuery",
     "DuplicateGroupView",
     "DuplicateSummary",
     "FileObservation",

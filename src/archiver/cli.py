@@ -23,7 +23,6 @@ from .models import (
     ContentTagView,
     CurrentFileSort,
     CurrentFileTagView,
-    DuplicateGroupSearch,
     DuplicateGroupView,
     DuplicateSummary,
     FileObservation,
@@ -580,12 +579,12 @@ def _show_duplicate_summary(
         if catalog.current_scan(root) is None:
             print("Current scan: none")
             return
+        query = catalog.duplicates(root).limit(group_limit).member_limit(member_limit)
+        summary = query.summary()
+        _print_duplicate_summary(summary)
         if not details:
-            _print_duplicate_summary(catalog.duplicate_summary(root))
             return
-        result = catalog.search_duplicate_groups(root, group_limit=group_limit, member_limit=member_limit)
-        _print_duplicate_summary(result.summary)
-        _print_duplicate_details(result)
+        _print_duplicate_details(query.fetch(), summary)
 
 
 def _show_files(
@@ -900,16 +899,16 @@ def _print_duplicate_summary(summary: DuplicateSummary) -> None:
     print(f"Potential redundant bytes: {summary.potential_redundant_bytes}")
 
 
-def _print_duplicate_details(result: DuplicateGroupSearch) -> None:
-    if not result.groups:
+def _print_duplicate_details(groups: Sequence[DuplicateGroupView], summary: DuplicateSummary) -> None:
+    if not groups:
         print("No duplicate groups.")
         return
     print("GROUP  SHA-256        COPIES  SIZE   POTENTIAL REDUNDANT  PATHS")
     print("-----  ------------   ------  -----  -------------------  -----")
-    for index, group in enumerate(result.groups, start=1):
+    for index, group in enumerate(groups, start=1):
         _print_duplicate_group(index, group)
-    displayed = len(result.groups)
-    total = result.summary.duplicate_content_group_count
+    displayed = len(groups)
+    total = summary.duplicate_content_group_count
     qualifier = "all" if displayed == total else "first"
     print(f"Showing {qualifier} {displayed} of {total} duplicate groups.")
 

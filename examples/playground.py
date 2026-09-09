@@ -47,8 +47,8 @@ def run(workspace: Path) -> None:
         for observation in catalog.current_files(source):
             print(f"- {observation.relative_path} ({observation.content_id.digest[:12]}...)")
         print("\nDuplicate groups:")
-        for group in catalog.duplicate_groups(source):
-            paths = ", ".join(str(observation.relative_path) for observation in group)
+        for group in catalog.duplicates(source).fetch():
+            paths = ", ".join(str(observation.relative_path) for observation in group.members)
             print(f"- {paths}")
 
 

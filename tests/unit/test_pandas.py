@@ -1,7 +1,7 @@
 from pathlib import Path, PurePosixPath
 
 from archiver import ContentId, FileObservation, HistoricalObservation, Location, ScanRun
-from archiver.pandas import current_files_frame, duplicate_groups_frame, observation_history_frame, scan_history_frame
+from archiver.pandas import current_files_frame, observation_history_frame, scan_history_frame
 
 _CONTENT_ID = ContentId(algorithm="sha256", digest="a" * 64)
 _LOCATION = Location(id=7, root=Path("/catalog/source"))
@@ -130,36 +130,3 @@ def test_frame_functions_return_stable_columns_for_empty_input() -> None:
         "location_id",
         "root_path",
     ]
-
-
-def test_duplicate_groups_frame_preserves_group_order_and_size() -> None:
-    duplicate_content = ContentId(algorithm="sha256", digest="b" * 64)
-    first_group = (
-        FileObservation(_LOCATION, PurePosixPath("first-a.txt"), _CONTENT_ID, 1, 101),
-        FileObservation(_LOCATION, PurePosixPath("first-b.txt"), _CONTENT_ID, 2, 102),
-    )
-    second_group = (
-        FileObservation(_LOCATION, PurePosixPath("second-a.txt"), duplicate_content, 3, 103),
-        FileObservation(_LOCATION, PurePosixPath("second-b.txt"), duplicate_content, 4, 104),
-    )
-
-    frame = duplicate_groups_frame((first_group, second_group))
-
-    assert list(frame.columns) == [
-        "group_id",
-        "group_size",
-        "location_id",
-        "root_path",
-        "relative_path",
-        "algorithm",
-        "digest",
-        "size_bytes",
-        "mtime_ns",
-    ]
-    assert frame[["group_id", "group_size", "relative_path", "digest"]].to_dict(orient="records") == [
-        {"group_id": 1, "group_size": 2, "relative_path": "first-a.txt", "digest": "a" * 64},
-        {"group_id": 1, "group_size": 2, "relative_path": "first-b.txt", "digest": "a" * 64},
-        {"group_id": 2, "group_size": 2, "relative_path": "second-a.txt", "digest": "b" * 64},
-        {"group_id": 2, "group_size": 2, "relative_path": "second-b.txt", "digest": "b" * 64},
-    ]
-    assert list(duplicate_groups_frame([]).columns) == list(frame.columns)

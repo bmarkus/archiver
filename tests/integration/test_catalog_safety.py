@@ -49,17 +49,17 @@ def test_locations_with_one_shared_content_instance_remain_isolated(tmp_path: Pa
 
         assert first_scan is not None and second_scan is not None
         assert first_scan.id != second_scan.id
-        assert catalog.duplicate_groups(first_root) == []
-        assert catalog.duplicate_groups(second_root) == []
-        assert catalog.search_duplicate_groups(first_root).summary.duplicate_content_group_count == 0
-        assert catalog.search_duplicate_groups(second_root).summary.duplicate_content_group_count == 0
+        assert catalog.duplicates(first_root).fetch() == ()
+        assert catalog.duplicates(second_root).fetch() == ()
+        assert catalog.duplicates(first_root).summary().duplicate_content_group_count == 0
+        assert catalog.duplicates(second_root).summary().duplicate_content_group_count == 0
 
         first_file.write_bytes(b"changed")
         catalog.scan_directory(first_root)
 
         assert catalog.current_files(second_root) == second_current
         assert catalog.current_scan(second_root) == second_scan
-        assert catalog.duplicate_groups(second_root) == []
+        assert catalog.duplicates(second_root).fetch() == ()
 
 
 def test_open_rejects_invalid_catalogs_and_create_refuses_existing_path(tmp_path: Path) -> None:
@@ -157,4 +157,4 @@ def test_running_and_failed_history_rows_never_become_current_state(tmp_path: Pa
         assert catalog.current_scan(root) == expected_scan
         assert catalog.current_summary(root) == expected_summary
         assert catalog.current_files(root) == expected_current
-        assert catalog.duplicate_groups(root) == []
+        assert catalog.duplicates(root).fetch() == ()

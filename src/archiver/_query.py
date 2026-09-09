@@ -32,3 +32,23 @@ class CurrentObservationQuery:
         _validate_sort_expression(self.ordering)
         if self.limit is not None:
             _validate_limit(self.limit)
+
+
+@dataclass(frozen=True, slots=True)
+class DuplicateGroupQueryDescription:
+    """Duplicate groups from one resolved current scan."""
+
+    location: Location
+    scan_id: int
+    group_limit: int
+    member_limit: int
+
+    def __post_init__(self) -> None:
+        if self.location.id is None:
+            raise ValueError("a duplicate-group query requires a persisted location")
+        if type(self.scan_id) is not int:
+            raise TypeError("a duplicate-group query scan ID must be an integer")
+        if self.scan_id < 1:
+            raise ValueError("a duplicate-group query scan ID must be positive")
+        _validate_limit(self.group_limit)
+        _validate_limit(self.member_limit)

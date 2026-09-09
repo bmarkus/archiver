@@ -94,8 +94,8 @@ query grammar supplies the reusable transformations.
 
 ## The grammar available today
 
-Plans 004.1 and 004.2 established the first small slice of this design:
-current file observations for one root.
+Plans 004.1 through 004.4 established two focused query domains: current file
+observations and duplicate-content groups for one root.
 
 ~~~python
 from archiver.query import path, size
@@ -107,25 +107,35 @@ query = query.limit(20)
 rows = query.fetch()
 ~~~
 
-This is intentionally limited. The current public grammar supports path GLOB
-filtering, path, size, and modification-time ordering, positive limits, and bounded
-fetching. Queries are immutable and lazy: each transformation returns a new
-description, and fetch() resolves the root's latest successful scan.
+Duplicate inspection changes the result grain and therefore has its own bounded
+query type:
 
-The [current-file query grammar](docs/query-grammar.md) is the public usage
-reference. [Plan 004](docs/plans/004-query-grammar-and-api-refactor.md) records
-the implementation sequence and architectural constraints.
+~~~python
+groups = catalog.duplicates(root).limit(20).member_limit(20).fetch()
+summary = catalog.duplicates(root).summary()
+~~~
+
+This remains intentionally limited. Current-file queries support path GLOB
+filtering, deterministic ordering, bounded and streaming materialization, and
+complete reductions. Duplicate queries support fixed content grouping,
+bounded groups and members, and complete summaries. Queries are immutable and
+lazy: each transformation returns a new description, and terminals resolve the
+root's latest successful scan.
+
+The [query grammar](docs/query-grammar.md) is the public usage reference.
+[Plan 004](docs/plans/004-query-grammar-and-api-refactor.md) records the
+implementation sequence and architectural constraints.
 
 ## Why result shape matters
 
 The current grammar preserves the meaning of a row: it returns file
 observations. Some future catalog questions will have a different result shape.
 
-For example, duplicate inspection groups observations by content identity.
-A duplicate-group result may contain a content identity, copy count, and
-aggregate byte count, while an individual relative path is no longer the
-primary result. A future grouped query therefore needs its own typed result
-domain and must reject operations that do not apply to that domain.
+For example, duplicate inspection groups observations by content identity. A
+duplicate-group result contains a content identity, copy count, aggregate byte
+count, and bounded members, while an individual relative path is no longer the
+primary result. Its distinct typed result domain rejects operations that apply
+only to current-file rows.
 
 This is one reason the grammar is being added gradually. Grouping, aggregation,
 historical observations, tag predicates, and additional materialization

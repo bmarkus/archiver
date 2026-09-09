@@ -2,13 +2,22 @@
 
 Plans record the evolution of Archiver's design and implementation.
 
-**Active plan:** [004.4 — Grouped Queries and Duplicates](004.4-grouped-queries-and-duplicates.md)
+**Active plan:** [004.5 — Tag and Content Predicates](004.5-tag-and-content-predicates.md)
+
+**Implementation handoff (2026-09-09):** 004.4 is implemented and approved.
+004.5 is now active, but implementation has not started. The
+[final API contract](004-public-api-target.md) and 004.6–004.8 plans remain
+prepared for the accepted direction. Proceed one subplan at a time and stop
+after its acceptance checks.
 
 ## Numbering
 
 A top-level plan uses a whole number such as `001`. Follow-up work that extends that plan uses a decimal subplan number such as `001.1`, `001.2`, and `001.3`.
 
-Each subplan must identify its parent plan and include created, implementation, and status fields. The parent plan remains an immutable record of its original scope; subplans record later decisions and implementation work.
+Each subplan must identify its parent plan and include created, implementation,
+and status fields. Preserve historical implementation records. Explicitly
+requested parent-plan amendments must be dated and link their detailed
+subplans; this does not retroactively rewrite earlier implementation outcomes.
 
 ## Timeline
 
@@ -33,4 +42,12 @@ Each subplan must identify its parent plan and include created, implementation, 
 | 004.1 | [Query Foundation](004.1-query-foundation.md) | Implemented (approved) | 004 | Minimal immutable query description, SQLite compilation, and execution boundary for `current_files()`. |
 | 004.2 | [Current Observation API](004.2-current-observation-api.md) | Implemented (approved) | 004 | Public bounded current-file query with typed path, sort, and limit expressions. |
 | 004.3 | [Materialization and Reductions](004.3-materialization-and-reductions.md) | Implemented (approved) | 004 | Current-file terminals, complete reductions, bounded streaming, and explicit unbounded streaming. |
-| 004.4 | [Grouped Queries and Duplicates](004.4-grouped-queries-and-duplicates.md) | Approved (active) | 004 | Bounded current duplicate groups with complete summaries and member expansion; retire the Phase 1 duplicate query facade. |
+| 004.4 | [Grouped Queries and Duplicates](004.4-grouped-queries-and-duplicates.md) | Implemented (approved) | 004 | Bounded current duplicate groups with complete summaries and member expansion; retire the Phase 1 duplicate query facade. |
+| 004.5 | [Tag and Content Predicates](004.5-tag-and-content-predicates.md) | Active (implementation not started) | 004 | Shared predicates and distinct-content reduction. |
+| 004.6 | [Existing Read API Migration](004.6-existing-read-api-migration.md) | Prepared umbrella | 004 | Four sequential migration increments. |
+| 004.6a | [File Details and Migration](004.6a-file-details-and-migration.md) | Prepared | 004.6 | Typed tag views and direct files CLI queries. |
+| 004.6b | [Content Queries and Details](004.6b-content-queries-and-details.md) | Prepared | 004.6 | Catalog-wide content with root-scoped path previews. |
+| 004.6c | [Tag Vocabulary Queries](004.6c-tag-vocabulary-queries.md) | Prepared | 004.6 | Active vocabulary, usage counts and regex. |
+| 004.6d | [Retained Read Compilation](004.6d-retained-read-compilation.md) | Prepared | 004.6 | Shared internal execution for exact/history reads. |
+| 004.7 | [Public API Review and Cleanup](004.7-public-api-review-and-cleanup.md) | Prepared | 004 | Export, documentation and consumer audit. |
+| 004.8 | [CLI Consistency Audit](004.8-cli-consistency-audit.md) | Prepared | 004 | End-to-end CLI contract and umbrella completion audit. |

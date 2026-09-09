@@ -75,11 +75,11 @@ def test_duplicate_content_is_grouped_by_content_identity(tmp_path: Path) -> Non
     catalog = Catalog.create(tmp_path / "catalog.sqlite")
 
     summary = catalog.scan_directory(source)
-    groups = catalog.duplicate_groups(source)
+    groups = catalog.duplicates(source).fetch()
 
     assert summary.distinct_content_count == 1
     assert summary.duplicate_content_group_count == 1
-    assert [[entry.relative_path.as_posix() for entry in group] for group in groups] == [["one.txt", "two.txt"]]
+    assert [[entry.relative_path.as_posix() for entry in group.members] for group in groups] == [["one.txt", "two.txt"]]
 
 
 def test_same_name_with_different_bytes_is_not_duplicate(tmp_path: Path) -> None:
@@ -94,8 +94,8 @@ def test_same_name_with_different_bytes_is_not_duplicate(tmp_path: Path) -> None
     catalog.scan_directory(first_root)
     catalog.scan_directory(second_root)
 
-    assert catalog.duplicate_groups(first_root) == []
-    assert catalog.duplicate_groups(second_root) == []
+    assert catalog.duplicates(first_root).fetch() == ()
+    assert catalog.duplicates(second_root).fetch() == ()
 
 
 def test_rename_preserves_content_identity_between_scans(tmp_path: Path) -> None:
@@ -318,7 +318,7 @@ def test_observation_history_is_lazy_and_current_queries_exclude_history_only_ro
     catalog.scan_directory(source)
 
     assert catalog.find_by_content(source, historical_content) == []
-    assert catalog.duplicate_groups(source) == []
+    assert catalog.duplicates(source).fetch() == ()
     assert [item.relative_path.as_posix() for item in catalog.current_files(source)] == ["first.txt", "second.txt"]
 
 

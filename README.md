@@ -23,8 +23,8 @@ The first implementation phase established the catalog foundation: content ident
 
 Incremental design and implementation history is preserved in the [plan archive](docs/plans/README.md).
 
-The supported public grammar for current-file queries is documented separately
-in the [current-file query grammar](docs/query-grammar.md).
+The supported public grammar for current-file and duplicate queries is
+documented separately in the [query grammar](docs/query-grammar.md).
 
 ## Catalog concepts
 

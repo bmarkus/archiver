@@ -1,8 +1,10 @@
-# Current-file query grammar
+# Public query grammar
 
-This document describes the supported public grammar for finding file
-observations from a catalog's latest successful scan. It is a usage reference,
-not an implementation plan.
+This document describes the supported public grammar for current file
+observations and duplicate-content groups. It is a usage reference, not an
+implementation plan.
+
+## Current files
 
 Import the catalog and field vocabulary:
 
@@ -152,11 +154,59 @@ Each terminal resolves current state independently. If a scan changes the
 catalog between terminals, separate calls may observe different successful
 current scans; queries do not create snapshots.
 
+## Duplicate groups
+
+Use `Catalog.duplicates(root)` to inspect content identities with more than one
+file instance in the root's latest successful scan.
+
+The [Plan 004.4 public tutorial](../notebooks/public/plan-004.4-grouped-queries-and-duplicates.ipynb)
+provides a complete disposable example.
+
+A minimal query looks like this:
+
+```python
+from archiver import Catalog, DuplicateGroupQuery
+
+query: DuplicateGroupQuery = catalog.duplicates(root)
+groups = query.limit(20).member_limit(20).fetch()
+summary = query.summary()
+```
+
+New duplicate queries default to at most 20 groups and 20 displayed members per
+group. `limit()` and `member_limit()` replace those bounds immutably and accept
+only positive integers. There is no unbounded duplicate terminal.
+
+`fetch()` returns a tuple of `DuplicateGroupView` values. Each view contains the
+full content identity, content size, complete file-instance count, complete
+potential redundant bytes, and its bounded member tuple. Potential redundant
+bytes are `(file_instance_count - 1) * size_bytes`; empty-file duplicate groups
+are retained with zero potential redundant bytes.
+
+Groups are ordered by potential redundant bytes descending, then complete
+content algorithm and digest ascending. Members are ordered by complete POSIX
+relative path ascending. These orderings are fixed.
+
+`summary()` returns a `DuplicateSummary` over every duplicate group and ignores
+both display bounds. It contains the complete duplicate-group count,
+duplicate-file-instance count, and potential redundant bytes. Unknown,
+unscanned, and duplicate-free roots return no groups and an all-zero summary.
+
+Each terminal resolves current state independently. Within one `fetch()`, group
+selection and member expansion use the same resolved current scan. Queries are
+read-only and the catalog must remain open until a terminal completes.
+
+The earlier `duplicate_groups()`, `search_duplicate_groups()`,
+`duplicate_summary()`, and tuple-oriented `duplicate_groups_frame()` interfaces
+were retired when this grouped query was introduced. The duplicate CLI uses
+this query directly.
+
 ## Current boundary
 
-The current grammar supports path GLOB filtering; path, size, and modification
-time ordering; positive limits; bounded fetching and streaming; explicit
-unbounded streaming; and complete count and size reductions. It does not yet
-support size or time predicates, content or tag predicates, OR or NOT
-composition, projection, grouping, pagination, or historical-observation
-queries.
+The current-file grammar supports path GLOB filtering; path, size, and
+modification-time ordering; positive limits; bounded fetching and streaming;
+explicit unbounded streaming; and complete count and size reductions. The
+duplicate grammar supports one fixed content grouping, fixed ordering, bounded
+groups and members, and a complete summary. It does not yet support size or
+time predicates, content or tag predicates, OR or NOT composition, projection,
+arbitrary grouping, configurable duplicate ordering, pagination, or
+historical-observation queries.

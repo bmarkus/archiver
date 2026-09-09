@@ -8,6 +8,12 @@
 
 ## Goal
 
+Implementation direction amended 2026-09-09 at the user's request. The
+[final public API contract](004-public-api-target.md) and prepared 004.5–004.8
+subplans below specify the accepted target. This is planning only; no next
+subplan starts until explicitly requested. Earlier implementation records
+remain historical.
+
 Refactor the catalog read API around a small composable query grammar while preserving existing catalog semantics and behavior.
 
 The current API has accumulated specialized functions and result types for combinations of current and historical observations, path/content/tag filtering, sorting and limiting, duplicate detection, and aggregation. Many repeat the same relational operations. Replace those parallel query paths incrementally with:
@@ -57,14 +63,20 @@ Predicates and sort expressions must be typed and validated. Calling order and l
 
 ### Domain API
 
-`Catalog` provides a small number of semantic query constructors. The current-file constructor established by Plan 004.2 and the provisional duplicate constructor are:
+`Catalog` provides four semantic query constructors in the intended final API:
 
 ```python
 catalog.files(root)
 catalog.duplicates(root)
+catalog.contents()
+catalog.tags()
 ```
 
-`files` means current file observations scoped to one root; historical observations remain a distinct query domain. The duplicate constructor remains illustrative until its subplan approves it.
+`files` means current file observations scoped to one root. `duplicates`
+means current duplicate-content groups at that root. `contents` is catalog-wide
+content, including identities without current paths. `tags` is active vocabulary
+and usage, independent of locations. Historical reads retain their explicit
+iterator APIs. Contents and tags constructors are planned, not implemented.
 
 Semantic constructors should compose the shared query representation. A useful combination of existing operations should normally not require another `Catalog` method; new methods should represent genuine domain concepts.
 
@@ -125,7 +137,7 @@ All work remains read-only with respect to source files and catalog metadata on 
 
 ## Implementation sequence
 
-Each subplan must be independently understandable, testable, and approved before implementation. Do not design the complete grammar in advance.
+Each subplan must be independently understandable, testable, and approved before implementation. The final contract defines only the vocabulary required by existing capabilities; it does not authorize a general grammar or automatic implementation of the sequence.
 
 ### 004.1 — Query Foundation
 
@@ -157,30 +169,41 @@ new query in this subplan while preserving its output.
 
 **Completion goal:** duplicate inspection is expressed through the grammar without a separate implementation path.
 
-### 004.5 — Tag Predicates
+### 004.5 — Tag and Content Predicates
 
-Integrate typed tag predicates into observation queries without exposing joins. Preserve active-assertion, content-level, multi-tag, and provenance semantics.
+Implement [004.5](004.5-tag-and-content-predicates.md): typed all/any tag predicates,
+exact content identity predicates and complete distinct-content counts on files.
+Preserve active-assertion, content-level, multi-tag, and provenance semantics.
 
 **Completion goal:** current observations can be filtered by existing tag semantics through the grammar.
 
 ### 004.6 — Existing Read API Migration
 
-Map the remaining Phase 1 read methods onto the grammar. Classify each as a permanent domain operation, compatibility wrapper, or candidate for later deprecation.
+Follow [004.6](004.6-existing-read-api-migration.md) in four children: file detail
+views and caller migration; catalog-wide content queries and details; active tag
+vocabulary; retained exact/history read compilation. Retire replaced methods
+and their search envelopes in the same increment as their CLI/caller migration.
+No compatibility wrappers are needed for the explicitly listed pre-1.0 removals.
 
 **Completion goal:** the repository has one internal query architecture rather than old and new engines in parallel.
 
 ### 004.7 — Public API Review and Cleanup
 
-Approve the long-term public surface and compatibility policy. Document catalog actions, semantic query constructors, transformations, and terminals. Any removal or incompatible rename requires explicit authorization here.
+Follow [004.7](004.7-public-api-review-and-cleanup.md): audit actual public members
+against the accepted classification, clean up obsolete exports, document the
+implemented surface, and complete the public tutorial migration audit. No
+unlisted breaking changes are authorized.
 
 **Completion goal:** the public API is coherent, documented, and has an explicit migration story.
 
-### 004.8 — CLI Mapping
+### 004.8 — CLI Consistency Audit
 
-Refactor the CLI to construct queries through the approved public grammar while preserving its bounded user interface. The CLI need not expose every grammar operation.
+Follow [004.8](004.8-cli-consistency-audit.md): audit the CLI after its branches
+have migrated with their owning API subplans. Preserve its bounded interface,
+outputs and error behavior. The CLI need not expose every grammar operation.
 
-The duplicate CLI is migrated with Plan 004.4 because that subplan retires its
-specialized catalog facade. This subplan maps the remaining CLI reads.
+Duplicate CLI migration belongs to 004.4; files, content search and vocabulary
+belong to 004.6a–c. Retained exact reads and commands remain ordinary API calls.
 
 **Completion goal:** CLI query behavior derives from the same model as the Python API.
 
@@ -193,7 +216,11 @@ catalog.files(root)
 
 catalog.files(root).where(...).sort(...).limit(...).fetch()
 
-catalog.duplicates(root).sort(...).limit(...)
+catalog.duplicates(root).limit(20).member_limit(20).fetch()
+
+catalog.contents().where(tags.all_of("favorite")).limit(20).fetch()
+
+catalog.tags().where(tag_name.regex("^project:")).limit(20).fetch()
 ```
 
 Internally:

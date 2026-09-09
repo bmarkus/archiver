@@ -278,11 +278,3 @@ class DuplicateGroupView:
     file_instance_count: int
     potential_redundant_bytes: int
     members: tuple[FileObservation, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class DuplicateGroupSearch:
-    """Bounded duplicate groups together with complete aggregate metrics."""
-
-    groups: tuple[DuplicateGroupView, ...]
-    summary: DuplicateSummary
