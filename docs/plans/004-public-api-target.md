@@ -4,6 +4,11 @@ Status: Prepared for implementation; design accepted 2026-09-09.
 This document is the shared contract for Plans 004.5–004.8, not a description
 of features already implemented. The domain model and invariants remain authoritative.
 
+Amended 2026-09-29 by [004.4.1](004.4.1-duplicate-group-sorting-and-streaming.md):
+typed duplicate sorting and explicit bounded/unbounded group and member streams
+are accepted additions, not yet implemented. Its detailed lifetime and bounds
+contract governs those additions.
+
 ## Decisions and boundaries
 
 Four public query constructors represent four result domains:
@@ -29,7 +34,9 @@ Filtering precedes ordering and bounds regardless of transformation order.
 All complete reductions ignore display limits. SQLite applies bounds before
 materialization. SQL values are bound and identifiers come from closed mappings.
 
-No new unbounded row/group collection is added. Existing current-file
+No new unbounded row/group collection is added. Explicit cursor-backed duplicate
+group/member streams are authorized by 004.4.1; bounded fetch remains unchanged.
+Existing current-file
 stream_all(), history iterators, and exact per-content assertion lookups retain
 their explicit scope. No mutation or filesystem authority changes are approved.
 
@@ -38,6 +45,9 @@ their explicit scope. No mutation or filesystem authority changes are approved.
 Export field/expression factories from archiver.query:
 
 - Existing path.glob(), path.asc()/desc(), size.asc()/desc(), mtime.asc()/desc().
+- 004.4.1: size.asc()/desc() also order duplicate content sizes;
+  duplicate.file_count.asc()/desc() and duplicate.redundant_bytes.asc()/desc()
+  order complete group metrics. Full algorithm/digest ascending breaks ties.
 - content.is_(ContentId): exact full content identity; files and contents only.
 - tags.all_of(*names, provenance=None) and tags.any_of(*names, provenance=None):
   files and contents only. Require at least one name, validate and deduplicate
@@ -50,7 +60,8 @@ Export field/expression factories from archiver.query:
   tag_usage.assertion_count.asc()/desc(): vocabulary only.
 
 Reject expressions from another domain. No general OR/NOT, arbitrary grouping,
-size/time predicates, or duplicate predicates/orderings are included.
+size/time predicates, or duplicate predicates are included. Duplicate ordering
+is limited to the expressions specified by 004.4.1.
 
 ## Query types and terminals
 
@@ -60,7 +71,7 @@ Keep SQL/private tokens out of the documented construction API.
 | Type | Source and transformations | Terminals and result |
 | --- | --- | --- |
 | CurrentFileQuery | files(root); where, sort, limit (default 20) | Existing fetch, first, count, total_size_bytes, stream, stream_all; add distinct_content_count() -> int |
-| DuplicateGroupQuery | duplicates(root); limit, member_limit (both default 20); fixed existing ordering | Existing fetch() -> tuple[DuplicateGroupView, ...], summary() -> DuplicateSummary |
+| DuplicateGroupQuery | duplicates(root); sort, limit, member_limit (both default 20); default redundant bytes descending | fetch() -> tuple[DuplicateGroupView, ...], summary() -> DuplicateSummary; 004.4.1 adds stream()/stream_all() -> Iterator[DuplicateGroupHandle] |
 | ContentQuery | contents(); where, limit (default 20); fixed full algorithm/digest ascending | fetch() -> tuple[ContentRecord, ...], count() -> int; with_details(...) |
 | TagVocabularyQuery | tags(); where(regex), sort, limit (default 20), provenance(kind) | fetch() -> tuple[TagUsage, ...], count() -> int |
 
@@ -78,6 +89,12 @@ count order ties use name ascending even for descending primary order.
 count() counts matching names, not content or assertion rows.
 
 ## Typed detail views
+
+004.4.1 separately adds immutable `DuplicateGroupHandle` in `archiver.query`,
+re-exported from `archiver`. It carries complete group metrics and a pinned scan;
+`stream_members()` respects the inherited member limit, while
+`stream_all_members()` streams every member. Neither constructs a member tuple.
+These handles are distinct from existing bounded `DuplicateGroupView` values.
 
 CurrentFileQuery.with_tags(*, limit=3, all_tags=False) -> CurrentFileTagQuery.
 ContentQuery.with_details(*, root, path_limit=20, tag_limit=3, all_tags=False)
@@ -177,4 +194,3 @@ notebook from a clean kernel, validate nbformat, and strip outputs/counts.
 Update docs/query-grammar.md only as APIs become implemented. Record files,
 tests, behavior, schema (none), decisions, deviations and validation outcomes.
 Stop after the requested subplan; do not start the next automatically.
-
