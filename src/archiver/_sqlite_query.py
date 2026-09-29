@@ -10,9 +10,13 @@ from pathlib import PurePosixPath
 from ._query import CurrentObservationQuery, DuplicateGroupQueryDescription
 from .models import ContentId, DuplicateGroupView, DuplicateSummary, FileObservation, Location
 from .query import (
+    ContentPredicate,
+    PathGlobPredicate,
+    TagPredicate,
     _CurrentFileField,
     _SortDirection,
-    _validate_path_glob_predicate,
+    _TagMatchMode,
+    _validate_current_file_predicate,
     _validate_sort_expression,
 )
 
@@ -41,12 +45,52 @@ def _compile_current_observation_scope(query: CurrentObservationQuery) -> tuple[
     where_clauses = ["locations.id = ?", "scans.id = locations.current_scan_id"]
     parameters: list[object] = [query.location.id]
     for predicate in query.predicates:
-        _validate_path_glob_predicate(predicate)
-        where_clauses.append("observations.relative_path GLOB ?")
-        parameters.append(predicate.pattern)
+        _validate_current_file_predicate(predicate)
+        if type(predicate) is PathGlobPredicate:
+            where_clauses.append("observations.relative_path GLOB ?")
+            parameters.append(predicate.pattern)
+        elif type(predicate) is ContentPredicate:
+            where_clauses.append(
+                """EXISTS (
+                    SELECT 1
+                    FROM content AS matching_content
+                    WHERE matching_content.id = observations.content_id
+                      AND matching_content.algorithm = ?
+                      AND matching_content.digest = ?
+                )"""
+            )
+            parameters.extend((predicate.content_id.algorithm, predicate.content_id.digest))
+        else:
+            assert type(predicate) is TagPredicate
+            tag_selection, tag_parameters = _compile_active_tag_match(predicate)
+            where_clauses.append(f"observations.content_id IN ({tag_selection})")
+            parameters.extend(tag_parameters)
 
     where_clause = " AND\n              ".join(where_clauses)
     return where_clause, tuple(parameters)
+
+
+def _compile_active_tag_match(predicate: TagPredicate) -> tuple[str, tuple[object, ...]]:
+    """Compile distinct content IDs matching one active-tag predicate."""
+    placeholders = ", ".join("?" for _ in predicate.names)
+    provenance_clause = ""
+    parameters: list[object] = [*predicate.names]
+    if predicate.provenance is not None:
+        provenance_clause = "AND matching_assertions.provenance_kind = ?"
+        parameters.append(predicate.provenance)
+    required_count = len(predicate.names) if predicate.match is _TagMatchMode.ALL else 1
+    parameters.append(required_count)
+    return (
+        f"""SELECT matching_assertions.content_id
+                FROM content_tag_assertions AS matching_assertions
+                JOIN tags AS matching_tags ON matching_tags.id = matching_assertions.tag_id
+                WHERE matching_assertions.retracted_at_ns IS NULL
+                  AND matching_tags.name IN ({placeholders})
+                  {provenance_clause}
+                GROUP BY matching_assertions.content_id
+                HAVING COUNT(DISTINCT matching_tags.name) >= ?""",
+        tuple(parameters),
+    )
 
 
 def _compile_current_observation_ordering(query: CurrentObservationQuery) -> str:
@@ -115,6 +159,21 @@ def compile_current_observation_total_size(query: CurrentObservationQuery) -> Sq
     )
 
 
+def compile_current_observation_distinct_content_count(query: CurrentObservationQuery) -> SqliteQuery:
+    """Compile a complete distinct-content count ignoring ordering and limits."""
+    where_clause, parameters = _compile_current_observation_scope(query)
+    return SqliteQuery(
+        statement=f"""
+            SELECT COUNT(DISTINCT observations.content_id) AS distinct_content_count
+            FROM file_observations AS observations
+            JOIN scan_runs AS scans ON scans.id = observations.scan_id
+            JOIN locations ON locations.id = scans.location_id
+            WHERE {where_clause}
+        """,
+        parameters=parameters,
+    )
+
+
 def iter_current_observations(
     connection: sqlite3.Connection, query: CurrentObservationQuery
 ) -> Iterator[FileObservation]:
@@ -168,6 +227,16 @@ def execute_current_observation_total_size(connection: sqlite3.Connection, query
     row = connection.execute(compiled.statement, compiled.parameters).fetchone()
     assert row is not None
     return int(row["total_size_bytes"])
+
+
+def execute_current_observation_distinct_content_count(
+    connection: sqlite3.Connection, query: CurrentObservationQuery
+) -> int:
+    """Return the complete number of matching current content identities."""
+    compiled = compile_current_observation_distinct_content_count(query)
+    row = connection.execute(compiled.statement, compiled.parameters).fetchone()
+    assert row is not None
+    return int(row["distinct_content_count"])
 
 
 def _compile_duplicate_scope(query: DuplicateGroupQueryDescription) -> tuple[str, tuple[object, ...]]:

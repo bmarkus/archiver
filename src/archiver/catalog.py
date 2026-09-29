@@ -14,6 +14,7 @@ from uuid import uuid4
 from ._query import CurrentObservationQuery, DuplicateGroupQueryDescription
 from ._sqlite_query import (
     execute_current_observation_count,
+    execute_current_observation_distinct_content_count,
     execute_current_observation_total_size,
     execute_duplicate_groups,
     execute_duplicate_summary,
@@ -934,6 +935,14 @@ class Catalog:
     def _total_size_current_file_query(self, query: CurrentFileQuery) -> int:
         internal_query = self._current_observation_query(query, limit=None)
         return 0 if internal_query is None else execute_current_observation_total_size(self._connection, internal_query)
+
+    def _distinct_content_count_current_file_query(self, query: CurrentFileQuery) -> int:
+        internal_query = self._current_observation_query(query, limit=None)
+        return (
+            0
+            if internal_query is None
+            else execute_current_observation_distinct_content_count(self._connection, internal_query)
+        )
 
     def _stream_current_file_query(self, query: CurrentFileQuery, *, limit: int | None) -> Iterator[FileObservation]:
         internal_query = self._current_observation_query(query, limit=limit)

@@ -5,10 +5,10 @@ Plans record the evolution of Archiver's design and implementation.
 **Active plan:** [004.5 — Tag and Content Predicates](004.5-tag-and-content-predicates.md)
 
 **Implementation handoff (2026-09-09):** 004.4 is implemented and approved.
-004.5 is now active, but implementation has not started. The
+004.5 is implemented pending review. The
 [final API contract](004-public-api-target.md) and 004.6–004.8 plans remain
-prepared for the accepted direction. Proceed one subplan at a time and stop
-after its acceptance checks.
+prepared for the accepted direction. Do not begin 004.6a until 004.5 is
+reviewed and a subsequent implementation request makes it active.
 
 ## Numbering
 
@@ -43,7 +43,7 @@ subplans; this does not retroactively rewrite earlier implementation outcomes.
 | 004.2 | [Current Observation API](004.2-current-observation-api.md) | Implemented (approved) | 004 | Public bounded current-file query with typed path, sort, and limit expressions. |
 | 004.3 | [Materialization and Reductions](004.3-materialization-and-reductions.md) | Implemented (approved) | 004 | Current-file terminals, complete reductions, bounded streaming, and explicit unbounded streaming. |
 | 004.4 | [Grouped Queries and Duplicates](004.4-grouped-queries-and-duplicates.md) | Implemented (approved) | 004 | Bounded current duplicate groups with complete summaries and member expansion; retire the Phase 1 duplicate query facade. |
-| 004.5 | [Tag and Content Predicates](004.5-tag-and-content-predicates.md) | Active (implementation not started) | 004 | Shared predicates and distinct-content reduction. |
+| 004.5 | [Tag and Content Predicates](004.5-tag-and-content-predicates.md) | Implemented (pending review) | 004 | Shared predicates and distinct-content reduction. |
 | 004.6 | [Existing Read API Migration](004.6-existing-read-api-migration.md) | Prepared umbrella | 004 | Four sequential migration increments. |
 | 004.6a | [File Details and Migration](004.6a-file-details-and-migration.md) | Prepared | 004.6 | Typed tag views and direct files CLI queries. |
 | 004.6b | [Content Queries and Details](004.6b-content-queries-and-details.md) | Prepared | 004.6 | Catalog-wide content with root-scoped path previews. |

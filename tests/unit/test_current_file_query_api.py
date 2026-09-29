@@ -5,15 +5,26 @@ from pathlib import Path
 
 import pytest
 
-from archiver import Catalog, CurrentFileQuery
+from archiver import Catalog, ContentId, CurrentFileQuery
 from archiver._query import CurrentObservationQuery
 from archiver._sqlite_query import (
     compile_current_observation_count,
+    compile_current_observation_distinct_content_count,
     compile_current_observation_total_size,
     compile_current_observations,
 )
 from archiver.models import Location
-from archiver.query import PathGlobPredicate, SortExpression, mtime, path, size
+from archiver.query import (
+    ContentPredicate,
+    PathGlobPredicate,
+    SortExpression,
+    TagPredicate,
+    content,
+    mtime,
+    path,
+    size,
+    tags,
+)
 
 
 def test_public_query_objects_are_immutable_semantic_values(tmp_path: Path) -> None:
@@ -53,6 +64,26 @@ def test_public_query_objects_are_immutable_semantic_values(tmp_path: Path) -> N
         second_catalog.close()
 
 
+def test_content_and_tag_predicates_are_canonical_immutable_values() -> None:
+    content_id = ContentId("sha256", "a" * 64)
+    exact = content.is_(content_id)
+    all_tags = tags.all_of("zeta", "alpha", "zeta", provenance="user")
+    any_tags = tags.any_of("zeta", "alpha")
+
+    assert isinstance(exact, ContentPredicate)
+    assert exact.content_id == content_id
+    assert isinstance(all_tags, TagPredicate)
+    assert all_tags.names == ("alpha", "zeta")
+    assert all_tags.provenance == "user"
+    assert all_tags.match.value == "all"
+    assert any_tags.names == ("alpha", "zeta")
+    assert any_tags.match.value == "any"
+    assert all_tags == tags.all_of("alpha", "zeta", provenance="user")
+
+    with pytest.raises(FrozenInstanceError):
+        setattr(all_tags, "names", ("changed",))
+
+
 def test_public_query_rejects_invalid_limits_and_expressions(tmp_path: Path) -> None:
     root = tmp_path / "source"
     root.mkdir()
@@ -66,8 +97,10 @@ def test_public_query_rejects_invalid_limits_and_expressions(tmp_path: Path) -> 
             with pytest.raises(TypeError, match="integer"):
                 query.limit(invalid_type)  # type: ignore[arg-type]
 
-        with pytest.raises(TypeError, match="path GLOB predicate"):
+        with pytest.raises(TypeError, match="current-file predicate"):
             query.where(object())  # type: ignore[arg-type]
+        with pytest.raises(TypeError, match="current-file predicate"):
+            query.where(size.asc())  # type: ignore[arg-type]
         with pytest.raises(TypeError, match="sort expression"):
             query.sort(object())  # type: ignore[arg-type]
         with pytest.raises(ValueError, match="path field"):
@@ -78,6 +111,29 @@ def test_public_query_rejects_invalid_limits_and_expressions(tmp_path: Path) -> 
             SortExpression(field="size_bytes", direction=size.desc().direction)  # type: ignore[arg-type]
         with pytest.raises(ValueError, match="sort direction"):
             SortExpression(field=size.token, direction="DESC")  # type: ignore[arg-type]
+
+
+def test_content_and_tag_factories_reject_invalid_arguments(tmp_path: Path) -> None:
+    root = tmp_path / "source"
+    root.mkdir()
+    with Catalog.create(tmp_path / "catalog.sqlite") as catalog:
+        query = catalog.files(root)
+        with pytest.raises(TypeError, match="ContentId"):
+            content.is_("sha256:a")  # type: ignore[arg-type]
+        with pytest.raises(ValueError, match="at least one tag"):
+            tags.all_of()
+        with pytest.raises(ValueError, match="at least one tag"):
+            tags.any_of()
+        with pytest.raises(ValueError, match="tag must match"):
+            tags.all_of("Invalid Tag")
+        with pytest.raises(TypeError, match="tag names must be strings"):
+            tags.any_of("valid", 3)  # type: ignore[arg-type]
+        with pytest.raises(TypeError, match="string or None"):
+            tags.all_of("valid", provenance=True)  # type: ignore[arg-type]
+        with pytest.raises(ValueError, match="'user', 'system', or None"):
+            tags.any_of("valid", provenance="external")  # type: ignore[arg-type]
+        with pytest.raises(TypeError, match="current-file predicate"):
+            query.where(object())  # type: ignore[arg-type]
 
 
 def test_compiler_maps_closed_tokens_and_parameterizes_predicates_and_limit(tmp_path: Path) -> None:
@@ -104,6 +160,42 @@ def test_compiler_maps_closed_tokens_and_parameterizes_predicates_and_limit(tmp_
     assert "LIMIT ?" in compiled.statement
 
 
+def test_compiler_parameterizes_content_and_distinct_active_tag_predicates(tmp_path: Path) -> None:
+    location = Location(id=42, root=tmp_path / "source")
+    content_id = ContentId("sha256", "b" * 64)
+    query = CurrentObservationQuery(
+        location=location,
+        predicates=(
+            content.is_(content_id),
+            tags.all_of("zeta", "alpha", provenance="system"),
+            tags.any_of("beta", "alpha"),
+        ),
+        ordering=path.asc(),
+        limit=3,
+    )
+
+    compiled = compile_current_observations(query)
+
+    assert compiled.parameters == (
+        42,
+        "sha256",
+        "b" * 64,
+        "alpha",
+        "zeta",
+        "system",
+        2,
+        "alpha",
+        "beta",
+        1,
+        3,
+    )
+    assert compiled.statement.count("EXISTS (") == 1
+    assert compiled.statement.count("observations.content_id IN (") == 2
+    assert "COUNT(DISTINCT matching_tags.name) >= ?" in compiled.statement
+    assert "matching_assertions.retracted_at_ns IS NULL" in compiled.statement
+    assert "LIMIT ?" in compiled.statement
+
+
 def test_path_order_does_not_add_a_conflicting_tie_breaker(tmp_path: Path) -> None:
     location = Location(id=7, root=tmp_path / "source")
 
@@ -124,11 +216,13 @@ def test_reduction_compilers_ignore_row_order_and_limit(tmp_path: Path) -> None:
 
     count = compile_current_observation_count(query)
     total_size = compile_current_observation_total_size(query)
+    distinct_content = compile_current_observation_distinct_content_count(query)
 
-    for compiled in (count, total_size):
+    for compiled in (count, total_size, distinct_content):
         assert compiled.parameters == (42, "nested/*.txt")
         assert "ORDER BY" not in compiled.statement
         assert "LIMIT" not in compiled.statement
         assert "observations.relative_path GLOB ?" in compiled.statement
     assert "COUNT(*) AS count" in count.statement
     assert "COALESCE(SUM(observations.size_bytes), 0) AS total_size_bytes" in total_size.statement
+    assert "COUNT(DISTINCT observations.content_id) AS distinct_content_count" in distinct_content.statement

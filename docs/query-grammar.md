@@ -4,18 +4,21 @@ This document describes the supported public grammar for current file
 observations and duplicate-content groups. It is a usage reference, not an
 implementation plan.
 
+The [Plan 004.5 public tutorial](../notebooks/public/plan-004.5-tag-and-content-predicates.ipynb)
+demonstrates content and tag predicates with disposable synthetic files.
+
 ## Current files
 
 Import the catalog and field vocabulary:
 
 ~~~python
 from archiver import Catalog
-from archiver.query import mtime, path, size
+from archiver.query import content, mtime, path, size, tags
 ~~~
 
 Start a query for one filesystem root with Catalog.files(root). The root is
 validated and canonicalized when the query is created. The query is lazy: it
-does not look up a scan or read observations until fetch() runs.
+does not look up a scan or read observations until a terminal runs.
 
 ~~~python
 query = catalog.files(root)
@@ -27,7 +30,7 @@ Every new query has ascending relative-path order and a limit of 20 rows.
 
 ~~~python
 catalog.files(root)
-    .where(path.glob(pattern))  # zero or more times
+    .where(predicate)           # zero or more times
     .sort(ordering)             # zero or more times
     .limit(count)               # zero or more times
     .fetch()
@@ -38,7 +41,7 @@ earlier query, so a base query can be reused to create several variants.
 
 | Method | Accepted value | Effect |
 | --- | --- | --- |
-| where(...) | path.glob(pattern) | Add a path predicate. |
+| where(...) | path.glob(pattern), content.is_(content_id), tags.all_of(...), or tags.any_of(...) | Add a predicate. |
 | sort(...) | path.asc(), path.desc(), size.asc(), size.desc(), mtime.asc(), or mtime.desc() | Replace the ordering. |
 | limit(...) | A positive int | Replace the maximum result count. |
 | fetch() | No arguments | Return matching FileObservation values as a tuple. |
@@ -46,10 +49,13 @@ earlier query, so a base query can be reused to create several variants.
 There is intentionally no public unbounded fetch. To change the result bound,
 call limit(count) before fetch().
 
-## Filtering with path.glob()
+## Filtering
 
-where() currently accepts only predicates created by path.glob(pattern).
-Passing a string directly, such as where("*.txt"), is not supported.
+`where()` accepts typed predicates created by the public `path`, `content`, and
+`tags` factories. Passing raw strings, content IDs, or tag names directly is
+not supported.
+
+### Paths
 
 Patterns use SQLite's case-sensitive GLOB syntax and match the complete POSIX
 relative path stored in the catalog. Paths do not include the root itself and
@@ -76,6 +82,45 @@ text_under_nested = catalog.files(root).where(path.glob("nested/*")).where(path.
 ~~~
 
 The example returns only paths that satisfy both patterns.
+
+### Exact content identity
+
+Use `content.is_()` with a complete `ContentId` to select every current path
+whose bytes have that identity:
+
+```python
+from archiver import ContentId
+
+content_id = ContentId("sha256", "a" * 64)
+copies = catalog.files(root).where(content.is_(content_id))
+```
+
+Both the algorithm and digest participate in matching. Content identity is
+independent of pathname, so duplicate paths with the same bytes all match.
+
+### Active tags
+
+Use `tags.all_of()` when every named tag must be active on the content, or
+`tags.any_of()` when at least one must be active:
+
+```python
+reviewed_photos = catalog.files(root).where(tags.all_of("photo", "reviewed"))
+interesting = catalog.files(root).where(tags.any_of("favorite", "important"))
+system_photos = catalog.files(root).where(tags.all_of("photo", provenance="system"))
+```
+
+Tag names are validated, deduplicated, and placed in canonical order. At least
+one name is required. `provenance` may be `None` (the default), `"user"`, or
+`"system"`. With `all_of()`, every requested tag must have an independently
+matching active assertion under that provenance. Retracted assertions do not
+match, and multiple active producers do not duplicate file results.
+
+Repeated `where()` calls always mean logical AND, including across predicate
+families:
+
+```python
+reviewed_nested = catalog.files(root).where(tags.all_of("reviewed")).where(path.glob("nested/*"))
+```
 
 ## Sorting and limiting
 
@@ -121,13 +166,15 @@ scan. A valid root that has never been scanned, or is not known to the catalog,
 returns an empty tuple.
 
 Use `first()` for one ordered result without materializing a page. It returns a
-`FileObservation` or `None` when no row matches. `count()` and
-`total_size_bytes()` return the complete number and logical size of matching
-current observations; neither reduction is affected by `limit()`.
+`FileObservation` or `None` when no row matches. `count()`,
+`distinct_content_count()`, and `total_size_bytes()` return the complete file
+count, content-identity count, and logical size of matching current
+observations; none of these reductions is affected by `limit()`.
 
 ```python
 first_row = preview.first()
 match_count = preview.count()
+content_count = preview.distinct_content_count()
 total_bytes = preview.total_size_bytes()
 ```
 

@@ -6,9 +6,16 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Final, Self
+from typing import TYPE_CHECKING, Final, Self, TypeAlias
 
-from .models import DuplicateGroupView, DuplicateSummary, FileObservation
+from .models import (
+    ContentId,
+    DuplicateGroupView,
+    DuplicateSummary,
+    FileObservation,
+    TagProvenanceKind,
+    validate_tag_name,
+)
 
 if TYPE_CHECKING:
     from .catalog import Catalog
@@ -25,6 +32,11 @@ class _SortDirection(Enum):
     DESCENDING = "descending"
 
 
+class _TagMatchMode(Enum):
+    ALL = "all"
+    ANY = "any"
+
+
 @dataclass(frozen=True, slots=True)
 class PathGlobPredicate:
     """A case-sensitive SQLite GLOB predicate over a complete relative path.
@@ -38,6 +50,28 @@ class PathGlobPredicate:
 
     def __post_init__(self) -> None:
         _validate_path_glob_predicate(self)
+
+
+@dataclass(frozen=True, slots=True)
+class ContentPredicate:
+    """An exact full-content-identity predicate created by content.is_()."""
+
+    content_id: ContentId
+
+    def __post_init__(self) -> None:
+        _validate_content_predicate(self)
+
+
+@dataclass(frozen=True, slots=True)
+class TagPredicate:
+    """An active-tag predicate created by tags.all_of() or tags.any_of()."""
+
+    names: tuple[str, ...]
+    provenance: TagProvenanceKind | None
+    match: _TagMatchMode
+
+    def __post_init__(self) -> None:
+        _validate_tag_predicate(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,9 +124,31 @@ class _SortableField:
         return SortExpression(field=self.token, direction=_SortDirection.DESCENDING)
 
 
+@dataclass(frozen=True, slots=True)
+class _ContentField:
+    def is_(self, content_id: ContentId) -> ContentPredicate:
+        """Match one exact full content identity."""
+        return ContentPredicate(content_id=content_id)
+
+
+@dataclass(frozen=True, slots=True)
+class _TagsField:
+    def all_of(self, *names: str, provenance: TagProvenanceKind | None = None) -> TagPredicate:
+        """Match content having every requested active tag."""
+        return _make_tag_predicate(names, provenance, _TagMatchMode.ALL)
+
+    def any_of(self, *names: str, provenance: TagProvenanceKind | None = None) -> TagPredicate:
+        """Match content having at least one requested active tag."""
+        return _make_tag_predicate(names, provenance, _TagMatchMode.ANY)
+
+
 path: Final[_PathField] = _PathField()
 size: Final[_SortableField] = _SortableField(_CurrentFileField.SIZE)
 mtime: Final[_SortableField] = _SortableField(_CurrentFileField.MTIME)
+content: Final[_ContentField] = _ContentField()
+tags: Final[_TagsField] = _TagsField()
+
+CurrentFilePredicate: TypeAlias = PathGlobPredicate | ContentPredicate | TagPredicate
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,7 +161,7 @@ class CurrentFileQuery:
     """
 
     root: Path
-    predicates: tuple[PathGlobPredicate, ...] = ()
+    predicates: tuple[CurrentFilePredicate, ...] = ()
     ordering: SortExpression = field(default_factory=path.asc)
     row_limit: int = 20
     _catalog: Catalog = field(repr=False, compare=False, kw_only=True)
@@ -116,18 +172,18 @@ class CurrentFileQuery:
         if not isinstance(self.predicates, tuple):
             raise TypeError("current-file query predicates must be a tuple")
         for predicate in self.predicates:
-            _validate_path_glob_predicate(predicate)
+            _validate_current_file_predicate(predicate)
         _validate_sort_expression(self.ordering)
         _validate_limit(self.row_limit)
 
-    def where(self, predicate: PathGlobPredicate) -> Self:
-        """Return a query with an additional path.glob() predicate.
+    def where(self, predicate: CurrentFilePredicate) -> Self:
+        """Return a query with an additional current-file predicate.
 
-        Predicate must be created by path.glob(). Repeated calls are combined
-        with logical AND. This method returns a new query and leaves this query
-        unchanged.
+        Predicates are created by path.glob(), content.is_(), tags.all_of(), or
+        tags.any_of(). Repeated calls are combined with logical AND. This
+        method returns a new query and leaves this query unchanged.
         """
-        _validate_path_glob_predicate(predicate)
+        _validate_current_file_predicate(predicate)
         return replace(self, predicates=(*self.predicates, predicate))
 
     def sort(self, ordering: SortExpression) -> Self:
@@ -176,6 +232,13 @@ class CurrentFileQuery:
         This reduction ignores the query's display limit.
         """
         return self._catalog._total_size_current_file_query(self)
+
+    def distinct_content_count(self) -> int:
+        """Return the complete number of matching content identities.
+
+        This reduction ignores the query's display limit.
+        """
+        return self._catalog._distinct_content_count_current_file_query(self)
 
     def stream(self) -> Iterator[FileObservation]:
         """Yield at most this query's bound in deterministic order."""
@@ -233,6 +296,62 @@ def _validate_path_glob_predicate(predicate: object) -> None:
         raise TypeError("a path GLOB pattern must be a string")
 
 
+def _validate_content_predicate(predicate: object) -> None:
+    if type(predicate) is not ContentPredicate:
+        raise TypeError("content.is_() requires a content identity")
+    if type(predicate.content_id) is not ContentId:
+        raise TypeError("content.is_() requires a ContentId")
+
+
+def _validate_tag_predicate(predicate: object) -> None:
+    if type(predicate) is not TagPredicate:
+        raise TypeError("tag filtering requires a tag predicate")
+    if not isinstance(predicate.names, tuple):
+        raise TypeError("tag predicate names must be a tuple")
+    if not predicate.names:
+        raise ValueError("tag predicates require at least one tag")
+    canonical_names = _canonical_tag_names(predicate.names)
+    if predicate.names != canonical_names:
+        raise ValueError("tag predicate names must be unique and in canonical order")
+    _validate_tag_provenance(predicate.provenance)
+    if not isinstance(predicate.match, _TagMatchMode):
+        raise ValueError("unsupported tag predicate match mode")
+
+
+def _validate_current_file_predicate(predicate: object) -> None:
+    if type(predicate) is PathGlobPredicate:
+        _validate_path_glob_predicate(predicate)
+    elif type(predicate) is ContentPredicate:
+        _validate_content_predicate(predicate)
+    elif type(predicate) is TagPredicate:
+        _validate_tag_predicate(predicate)
+    else:
+        raise TypeError("where() requires a current-file predicate")
+
+
+def _canonical_tag_names(names: tuple[str, ...]) -> tuple[str, ...]:
+    if any(not isinstance(name, str) for name in names):
+        raise TypeError("tag names must be strings")
+    return tuple(sorted({validate_tag_name(name) for name in names}))
+
+
+def _validate_tag_provenance(provenance: object) -> None:
+    if provenance is not None and not isinstance(provenance, str):
+        raise TypeError("tag provenance must be a string or None")
+    if provenance not in (None, "user", "system"):
+        raise ValueError("tag provenance must be 'user', 'system', or None")
+
+
+def _make_tag_predicate(
+    names: tuple[str, ...], provenance: TagProvenanceKind | None, match: _TagMatchMode
+) -> TagPredicate:
+    canonical_names = _canonical_tag_names(names)
+    if not canonical_names:
+        raise ValueError("tag predicates require at least one tag")
+    _validate_tag_provenance(provenance)
+    return TagPredicate(names=canonical_names, provenance=provenance, match=match)
+
+
 def _validate_sort_expression(ordering: object) -> None:
     if type(ordering) is not SortExpression:
         raise TypeError("sort() requires a current-file sort expression")
@@ -250,11 +369,16 @@ def _validate_limit(count: object) -> None:
 
 
 __all__ = [
+    "ContentPredicate",
     "CurrentFileQuery",
+    "CurrentFilePredicate",
     "DuplicateGroupQuery",
     "PathGlobPredicate",
     "SortExpression",
+    "TagPredicate",
+    "content",
     "mtime",
     "path",
     "size",
+    "tags",
 ]
