@@ -60,6 +60,6 @@ record a notebook review. Validation and review are intentionally separate.
 | Plan 004.2 current observation API | **Yes** | [Plan 004.2](../../docs/plans/004.2-current-observation-api.md) records review on 2026-09-06 and includes the notebook in its validated outcome. |
 | Plan 004.3 materialization and reductions | **Yes** | [Plan 004.3](../../docs/plans/004.3-materialization-and-reductions.md) records review on 2026-09-08 and includes the notebook in its validated outcome. |
 | Plan 004.4 grouped duplicate queries | **Yes** | [Plan 004.4](../../docs/plans/004.4-grouped-queries-and-duplicates.md) records review on 2026-09-09 and includes the notebook in its validated outcome. |
-| Plan 004.4.1 duplicate group streaming | **No — awaiting review** | [Plan 004.4.1](../../docs/plans/004.4.1-duplicate-group-sorting-and-streaming.md) is implemented and explicitly awaiting review. |
+| Plan 004.4.1 duplicate group streaming | **Yes — approved** | The user explicitly reviewed and approved this notebook on 2026-09-30; recorded in [Plan 004.4.1](../../docs/plans/004.4.1-duplicate-group-sorting-and-streaming.md#review-and-completion). |
 | Plan 004.5 tag and content predicates | **Yes** | [Plan 004.5](../../docs/plans/004.5-tag-and-content-predicates.md) records review on 2026-09-29 and includes the notebook in its validated outcome. |
-| Catalog query and stream lifecycle | **No — newly added** | Executed and structurally validated, but no review has yet been recorded. |
+| Catalog query and stream lifecycle | **Yes — approved** | The user explicitly reviewed and approved this notebook on 2026-09-30; recorded in [Plan 004.4.1](../../docs/plans/004.4.1-duplicate-group-sorting-and-streaming.md#review-and-completion). |

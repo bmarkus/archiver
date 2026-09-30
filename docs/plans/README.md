@@ -3,14 +3,14 @@
 Plans record the evolution of Archiver's design and implementation.
 
 **Active plan:** None. [004.4.1 — Duplicate Group Sorting and Streaming](004.4.1-duplicate-group-sorting-and-streaming.md)
-is implemented and awaiting review. Do not begin 004.6a automatically.
+is complete and approved. Do not begin 004.6a automatically.
 
-**Implementation handoff (2026-09-29):** 004.5 is implemented and approved. The
+**Implementation handoff (2026-09-30):** 004.4.1 and 004.5 are implemented and
+approved. The user also reviewed and approved the duplicate group streaming
+and query/stream lifecycle notebooks on 2026-09-30. The
 [final API contract](004-public-api-target.md) and 004.6–004.8 plans remain
-prepared for the accepted direction. 004.4.1 is now active for the demonstrated
-duplicate-processing requirement; this handoff prepares its design, with
-implementation completed by the subsequent request and now awaits review. Do
-not begin 004.6a automatically.
+prepared for the accepted direction. No subsequent plan is active. Do not begin
+004.6a automatically.
 
 004.4 introduced grouped queries conservatively; actual use later revealed
 why groups need sorting and explicit streaming; 004.4.1 evolves that abstraction
@@ -50,7 +50,7 @@ subplans; this does not retroactively rewrite earlier implementation outcomes.
 | 004.2 | [Current Observation API](004.2-current-observation-api.md) | Implemented (approved) | 004 | Public bounded current-file query with typed path, sort, and limit expressions. |
 | 004.3 | [Materialization and Reductions](004.3-materialization-and-reductions.md) | Implemented (approved) | 004 | Current-file terminals, complete reductions, bounded streaming, and explicit unbounded streaming. |
 | 004.4 | [Grouped Queries and Duplicates](004.4-grouped-queries-and-duplicates.md) | Implemented (approved) | 004 | Bounded current duplicate groups with complete summaries and member expansion; retire the Phase 1 duplicate query facade. |
-| 004.4.1 | [Duplicate Group Sorting and Streaming](004.4.1-duplicate-group-sorting-and-streaming.md) | Implemented (awaiting review) | 004.4 | Typed sorting and explicit bounded/unbounded group and member streams for later duplicate-handling workflows. |
+| 004.4.1 | [Duplicate Group Sorting and Streaming](004.4.1-duplicate-group-sorting-and-streaming.md) | Implemented (approved) | 004.4 | Typed sorting and explicit bounded/unbounded group and member streams for later duplicate-handling workflows. |
 | 004.5 | [Tag and Content Predicates](004.5-tag-and-content-predicates.md) | Implemented (approved) | 004 | Shared predicates and distinct-content reduction. |
 | 004.6 | [Existing Read API Migration](004.6-existing-read-api-migration.md) | Prepared umbrella | 004 | Four sequential migration increments. |
 | 004.6a | [File Details and Migration](004.6a-file-details-and-migration.md) | Prepared | 004.6 | Typed tag views and direct files CLI queries. |
