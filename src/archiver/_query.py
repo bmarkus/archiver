@@ -7,8 +7,9 @@ from .query import (
     CurrentFilePredicate,
     SortExpression,
     _validate_current_file_predicate,
+    _validate_current_file_sort_expression,
+    _validate_duplicate_sort_expression,
     _validate_limit,
-    _validate_sort_expression,
     path,
 )
 
@@ -29,7 +30,7 @@ class CurrentObservationQuery:
             raise TypeError("current-observation predicates must be a tuple")
         for predicate in self.predicates:
             _validate_current_file_predicate(predicate)
-        _validate_sort_expression(self.ordering)
+        _validate_current_file_sort_expression(self.ordering)
         if self.limit is not None:
             _validate_limit(self.limit)
 
@@ -40,8 +41,9 @@ class DuplicateGroupQueryDescription:
 
     location: Location
     scan_id: int
-    group_limit: int
-    member_limit: int
+    ordering: SortExpression
+    group_limit: int | None
+    member_limit: int | None
 
     def __post_init__(self) -> None:
         if self.location.id is None:
@@ -50,5 +52,8 @@ class DuplicateGroupQueryDescription:
             raise TypeError("a duplicate-group query scan ID must be an integer")
         if self.scan_id < 1:
             raise ValueError("a duplicate-group query scan ID must be positive")
-        _validate_limit(self.group_limit)
-        _validate_limit(self.member_limit)
+        _validate_duplicate_sort_expression(self.ordering)
+        if self.group_limit is not None:
+            _validate_limit(self.group_limit)
+        if self.member_limit is not None:
+            _validate_limit(self.member_limit)

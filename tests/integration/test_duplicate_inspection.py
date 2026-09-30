@@ -9,7 +9,7 @@ import pytest
 import archiver
 import archiver.models
 import archiver.pandas
-from archiver import Catalog, DuplicateGroupQuery, ScanFailure
+from archiver import Catalog, ContentId, DuplicateGroupQuery, ScanFailure
 from archiver._query import DuplicateGroupQueryDescription
 from archiver._sqlite_query import SqliteQuery
 from archiver.cli import main
@@ -220,7 +220,7 @@ def test_duplicate_fetch_pins_one_scan_for_groups_and_members(tmp_path: Path, mo
         original_compile_members = _sqlite_query.compile_duplicate_group_members
         switched = False
 
-        def switch_current_scan(internal: DuplicateGroupQueryDescription, content_database_id: int) -> SqliteQuery:
+        def switch_current_scan(internal: DuplicateGroupQueryDescription, content_id: ContentId) -> SqliteQuery:
             nonlocal switched
             if not switched:
                 catalog._connection.execute(
@@ -228,7 +228,7 @@ def test_duplicate_fetch_pins_one_scan_for_groups_and_members(tmp_path: Path, mo
                     (new_scan.id, location.id),
                 )
                 switched = True
-            return original_compile_members(internal, content_database_id)
+            return original_compile_members(internal, content_id)
 
         monkeypatch.setattr(_sqlite_query, "compile_duplicate_group_members", switch_current_scan)
         groups = catalog.duplicates(root).fetch()

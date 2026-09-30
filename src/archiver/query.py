@@ -13,6 +13,7 @@ from .models import (
     DuplicateGroupView,
     DuplicateSummary,
     FileObservation,
+    Location,
     TagProvenanceKind,
     validate_tag_name,
 )
@@ -25,6 +26,8 @@ class _CurrentFileField(Enum):
     PATH = "path"
     SIZE = "size"
     MTIME = "mtime"
+    DUPLICATE_FILE_COUNT = "duplicate_file_count"
+    DUPLICATE_REDUNDANT_BYTES = "duplicate_redundant_bytes"
 
 
 class _SortDirection(Enum):
@@ -142,11 +145,20 @@ class _TagsField:
         return _make_tag_predicate(names, provenance, _TagMatchMode.ANY)
 
 
+@dataclass(frozen=True, slots=True)
+class _DuplicateFields:
+    file_count: _SortableField = field(default_factory=lambda: _SortableField(_CurrentFileField.DUPLICATE_FILE_COUNT))
+    redundant_bytes: _SortableField = field(
+        default_factory=lambda: _SortableField(_CurrentFileField.DUPLICATE_REDUNDANT_BYTES)
+    )
+
+
 path: Final[_PathField] = _PathField()
 size: Final[_SortableField] = _SortableField(_CurrentFileField.SIZE)
 mtime: Final[_SortableField] = _SortableField(_CurrentFileField.MTIME)
 content: Final[_ContentField] = _ContentField()
 tags: Final[_TagsField] = _TagsField()
+duplicate: Final[_DuplicateFields] = _DuplicateFields()
 
 CurrentFilePredicate: TypeAlias = PathGlobPredicate | ContentPredicate | TagPredicate
 
@@ -173,7 +185,7 @@ class CurrentFileQuery:
             raise TypeError("current-file query predicates must be a tuple")
         for predicate in self.predicates:
             _validate_current_file_predicate(predicate)
-        _validate_sort_expression(self.ordering)
+        _validate_current_file_sort_expression(self.ordering)
         _validate_limit(self.row_limit)
 
     def where(self, predicate: CurrentFilePredicate) -> Self:
@@ -194,7 +206,7 @@ class CurrentFileQuery:
         ascending relative path. This method returns a new query and leaves
         this query unchanged.
         """
-        _validate_sort_expression(ordering)
+        _validate_current_file_sort_expression(ordering)
         return replace(self, ordering=ordering)
 
     def limit(self, count: int) -> Self:
@@ -258,6 +270,7 @@ class DuplicateGroupQuery:
     """An immutable, lazy, bounded query for current duplicate groups."""
 
     root: Path
+    ordering: SortExpression = field(default_factory=lambda: duplicate.redundant_bytes.desc())
     group_limit: int = 20
     member_row_limit: int = 20
     _catalog: Catalog = field(repr=False, compare=False, kw_only=True)
@@ -265,6 +278,7 @@ class DuplicateGroupQuery:
     def __post_init__(self) -> None:
         if not isinstance(self.root, Path) or not self.root.is_absolute():
             raise ValueError("a duplicate-group query requires a canonical absolute root")
+        _validate_duplicate_sort_expression(self.ordering)
         _validate_limit(self.group_limit)
         _validate_limit(self.member_row_limit)
 
@@ -272,6 +286,11 @@ class DuplicateGroupQuery:
         """Return a query with a replacement positive group bound."""
         _validate_limit(count)
         return replace(self, group_limit=count)
+
+    def sort(self, ordering: SortExpression) -> Self:
+        """Return a query with a replacement duplicate-group ordering."""
+        _validate_duplicate_sort_expression(ordering)
+        return replace(self, ordering=ordering)
 
     def member_limit(self, count: int) -> Self:
         """Return a query with a replacement positive member bound per group."""
@@ -285,6 +304,36 @@ class DuplicateGroupQuery:
     def summary(self) -> DuplicateSummary:
         """Return complete duplicate metrics independent of display bounds."""
         return self._catalog._summarize_duplicate_group_query(self)
+
+    def stream(self) -> Iterator[DuplicateGroupHandle]:
+        """Yield at most this query's group bound without loading members."""
+        return self._catalog._stream_duplicate_group_query(self, limit=self.group_limit)
+
+    def stream_all(self) -> Iterator[DuplicateGroupHandle]:
+        """Yield every duplicate group without loading members."""
+        return self._catalog._stream_duplicate_group_query(self, limit=None)
+
+
+@dataclass(frozen=True, slots=True)
+class DuplicateGroupHandle:
+    """One pinned duplicate group whose members are streamed on request."""
+
+    content_id: ContentId
+    size_bytes: int
+    file_instance_count: int
+    potential_redundant_bytes: int
+    _catalog: Catalog = field(repr=False, compare=False, kw_only=True)
+    _location: Location = field(repr=False, compare=False, kw_only=True)
+    _scan_id: int = field(repr=False, compare=False, kw_only=True)
+    _member_row_limit: int = field(repr=False, compare=False, kw_only=True)
+
+    def stream_members(self) -> Iterator[FileObservation]:
+        """Yield at most the inherited member bound in relative-path order."""
+        return self._catalog._stream_duplicate_group_members(self, limit=self._member_row_limit)
+
+    def stream_all_members(self) -> Iterator[FileObservation]:
+        """Yield every pinned member in relative-path order."""
+        return self._catalog._stream_duplicate_group_members(self, limit=None)
 
 
 def _validate_path_glob_predicate(predicate: object) -> None:
@@ -361,6 +410,30 @@ def _validate_sort_expression(ordering: object) -> None:
         raise ValueError("unsupported current-file sort direction")
 
 
+def _validate_current_file_sort_expression(ordering: object) -> None:
+    _validate_sort_expression(ordering)
+    assert isinstance(ordering, SortExpression)
+    if ordering.field not in {
+        _CurrentFileField.PATH,
+        _CurrentFileField.SIZE,
+        _CurrentFileField.MTIME,
+    }:
+        raise ValueError("unsupported current-file sort field")
+
+
+def _validate_duplicate_sort_expression(ordering: object) -> None:
+    if type(ordering) is not SortExpression:
+        raise TypeError("sort() requires a duplicate-group sort expression")
+    if ordering.field not in {
+        _CurrentFileField.SIZE,
+        _CurrentFileField.DUPLICATE_FILE_COUNT,
+        _CurrentFileField.DUPLICATE_REDUNDANT_BYTES,
+    }:
+        raise ValueError("unsupported duplicate-group sort field")
+    if not isinstance(ordering.direction, _SortDirection):
+        raise ValueError("unsupported duplicate-group sort direction")
+
+
 def _validate_limit(count: object) -> None:
     if type(count) is not int:
         raise TypeError("limit must be an integer")
@@ -373,10 +446,12 @@ __all__ = [
     "CurrentFileQuery",
     "CurrentFilePredicate",
     "DuplicateGroupQuery",
+    "DuplicateGroupHandle",
     "PathGlobPredicate",
     "SortExpression",
     "TagPredicate",
     "content",
+    "duplicate",
     "mtime",
     "path",
     "size",

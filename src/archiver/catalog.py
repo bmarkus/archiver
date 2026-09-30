@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from collections.abc import Callable, Collection, Iterator
-from contextlib import suppress
+from contextlib import closing, suppress
 from pathlib import Path, PurePosixPath
 from time import monotonic, time_ns
 from typing import cast
@@ -20,6 +20,8 @@ from ._sqlite_query import (
     execute_duplicate_summary,
     execute_first_current_observation,
     iter_current_observations,
+    iter_duplicate_group_members,
+    iter_duplicate_group_rows,
 )
 from .errors import InvalidCatalogError, RefreshFailure, ScanFailure, StaleRefreshError, TaggingError
 from .filesystem import regular_files
@@ -54,7 +56,16 @@ from .models import (
     TagUsage,
     validate_tag_name,
 )
-from .query import CurrentFileQuery, DuplicateGroupQuery, SortExpression, mtime, path, size
+from .query import (
+    CurrentFileQuery,
+    DuplicateGroupHandle,
+    DuplicateGroupQuery,
+    SortExpression,
+    duplicate,
+    mtime,
+    path,
+    size,
+)
 
 SCHEMA_VERSION = 2
 _TAG_NAME_REGEX_FUNCTION = "archiver_tag_name_regex"
@@ -1175,18 +1186,51 @@ class Catalog:
         return DuplicateGroupQuery(root=self._canonical_root(root), _catalog=self)
 
     def _fetch_duplicate_group_query(self, query: DuplicateGroupQuery) -> tuple[DuplicateGroupView, ...]:
-        internal_query = self._duplicate_group_query(query)
+        internal_query = self._duplicate_group_query(query, group_limit=query.group_limit)
         return () if internal_query is None else execute_duplicate_groups(self._connection, internal_query)
 
     def _summarize_duplicate_group_query(self, query: DuplicateGroupQuery) -> DuplicateSummary:
-        internal_query = self._duplicate_group_query(query)
+        internal_query = self._duplicate_group_query(query, group_limit=query.group_limit)
         return (
             DuplicateSummary(0, 0, 0)
             if internal_query is None
             else execute_duplicate_summary(self._connection, internal_query)
         )
 
-    def _duplicate_group_query(self, query: DuplicateGroupQuery) -> DuplicateGroupQueryDescription | None:
+    def _stream_duplicate_group_query(
+        self, query: DuplicateGroupQuery, *, limit: int | None
+    ) -> Iterator[DuplicateGroupHandle]:
+        internal_query = self._duplicate_group_query(query, group_limit=limit)
+        if internal_query is None:
+            return
+        with closing(iter_duplicate_group_rows(self._connection, internal_query)) as rows:
+            for row in rows:
+                yield DuplicateGroupHandle(
+                    content_id=ContentId(str(row["algorithm"]), str(row["digest"])),
+                    size_bytes=int(row["size_bytes"]),
+                    file_instance_count=int(row["file_instance_count"]),
+                    potential_redundant_bytes=int(row["potential_redundant_bytes"]),
+                    _catalog=self,
+                    _location=internal_query.location,
+                    _scan_id=internal_query.scan_id,
+                    _member_row_limit=query.member_row_limit,
+                )
+
+    def _stream_duplicate_group_members(
+        self, handle: DuplicateGroupHandle, *, limit: int | None
+    ) -> Iterator[FileObservation]:
+        internal_query = DuplicateGroupQueryDescription(
+            location=handle._location,
+            scan_id=handle._scan_id,
+            ordering=duplicate.redundant_bytes.desc(),
+            group_limit=None,
+            member_limit=limit,
+        )
+        yield from iter_duplicate_group_members(self._connection, internal_query, handle.content_id)
+
+    def _duplicate_group_query(
+        self, query: DuplicateGroupQuery, *, group_limit: int | None
+    ) -> DuplicateGroupQueryDescription | None:
         location = self._location_for_canonical_root(query.root)
         if location is None:
             return None
@@ -1197,7 +1241,8 @@ class Catalog:
         return DuplicateGroupQueryDescription(
             location=location,
             scan_id=scan_id,
-            group_limit=query.group_limit,
+            ordering=query.ordering,
+            group_limit=group_limit,
             member_limit=query.member_row_limit,
         )
 

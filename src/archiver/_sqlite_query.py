@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
@@ -29,6 +30,12 @@ _ORDER_COLUMNS = {
 _ORDER_DIRECTIONS = {
     _SortDirection.ASCENDING: "ASC",
     _SortDirection.DESCENDING: "DESC",
+}
+
+_DUPLICATE_ORDER_COLUMNS = {
+    _CurrentFileField.SIZE: "content.size_bytes",
+    _CurrentFileField.DUPLICATE_FILE_COUNT: "file_instance_count",
+    _CurrentFileField.DUPLICATE_REDUNDANT_BYTES: "potential_redundant_bytes",
 }
 
 
@@ -245,8 +252,12 @@ def _compile_duplicate_scope(query: DuplicateGroupQueryDescription) -> tuple[str
 
 
 def compile_duplicate_groups(query: DuplicateGroupQueryDescription) -> SqliteQuery:
-    """Compile bounded duplicate group selection with complete metrics."""
+    """Compile duplicate group selection with complete metrics."""
     where_clause, parameters = _compile_duplicate_scope(query)
+    order_column = _DUPLICATE_ORDER_COLUMNS[query.ordering.field]
+    direction = _ORDER_DIRECTIONS[query.ordering.direction]
+    limit_clause = "" if query.group_limit is None else "LIMIT ?"
+    limit_parameters: tuple[object, ...] = () if query.group_limit is None else (query.group_limit,)
     return SqliteQuery(
         statement=f"""
             SELECT
@@ -261,20 +272,20 @@ def compile_duplicate_groups(query: DuplicateGroupQueryDescription) -> SqliteQue
             WHERE {where_clause}
             GROUP BY content.id, content.algorithm, content.digest, content.size_bytes
             HAVING COUNT(*) > 1
-            ORDER BY potential_redundant_bytes DESC, content.algorithm ASC, content.digest ASC
-            LIMIT ?
+            ORDER BY {order_column} {direction}, content.algorithm ASC, content.digest ASC
+            {limit_clause}
         """,
-        parameters=(*parameters, query.group_limit),
+        parameters=(*parameters, *limit_parameters),
     )
 
 
-def compile_duplicate_group_members(query: DuplicateGroupQueryDescription, content_database_id: int) -> SqliteQuery:
-    """Compile bounded, ordered members for one selected duplicate group."""
-    if type(content_database_id) is not int:
-        raise TypeError("duplicate member content ID must be an integer")
-    if content_database_id < 1:
-        raise ValueError("duplicate member content ID must be positive")
+def compile_duplicate_group_members(query: DuplicateGroupQueryDescription, content_id: ContentId) -> SqliteQuery:
+    """Compile ordered members for one selected duplicate group."""
+    if type(content_id) is not ContentId:
+        raise TypeError("duplicate members require a ContentId")
     where_clause, parameters = _compile_duplicate_scope(query)
+    limit_clause = "" if query.member_limit is None else "LIMIT ?"
+    limit_parameters: tuple[object, ...] = () if query.member_limit is None else (query.member_limit,)
     return SqliteQuery(
         statement=f"""
             SELECT
@@ -285,11 +296,13 @@ def compile_duplicate_group_members(query: DuplicateGroupQueryDescription, conte
                 content.digest AS digest
             FROM file_observations AS observations
             JOIN content ON content.id = observations.content_id
-            WHERE {where_clause} AND observations.content_id = ?
+            WHERE {where_clause}
+              AND content.algorithm = ?
+              AND content.digest = ?
             ORDER BY observations.relative_path ASC
-            LIMIT ?
+            {limit_clause}
         """,
-        parameters=(*parameters, content_database_id, query.member_limit),
+        parameters=(*parameters, content_id.algorithm, content_id.digest, *limit_parameters),
     )
 
 
@@ -322,22 +335,47 @@ def execute_duplicate_groups(
     connection: sqlite3.Connection, query: DuplicateGroupQueryDescription
 ) -> tuple[DuplicateGroupView, ...]:
     """Execute one bounded duplicate query pinned to one current scan."""
-    compiled_groups = compile_duplicate_groups(query)
-    group_rows = connection.execute(compiled_groups.statement, compiled_groups.parameters).fetchall()
     groups: list[DuplicateGroupView] = []
-    for row in group_rows:
-        compiled_members = compile_duplicate_group_members(query, int(row["content_database_id"]))
-        member_rows = connection.execute(compiled_members.statement, compiled_members.parameters).fetchall()
-        groups.append(
-            DuplicateGroupView(
-                content_id=ContentId(algorithm=str(row["algorithm"]), digest=str(row["digest"])),
-                size_bytes=int(row["size_bytes"]),
-                file_instance_count=int(row["file_instance_count"]),
-                potential_redundant_bytes=int(row["potential_redundant_bytes"]),
-                members=tuple(_materialize_file_observation(query.location, member) for member in member_rows),
+    with closing(iter_duplicate_group_rows(connection, query)) as rows:
+        for row in rows:
+            content_id = ContentId(algorithm=str(row["algorithm"]), digest=str(row["digest"]))
+            groups.append(
+                DuplicateGroupView(
+                    content_id=content_id,
+                    size_bytes=int(row["size_bytes"]),
+                    file_instance_count=int(row["file_instance_count"]),
+                    potential_redundant_bytes=int(row["potential_redundant_bytes"]),
+                    members=tuple(iter_duplicate_group_members(connection, query, content_id)),
+                )
             )
-        )
     return tuple(groups)
+
+
+def iter_duplicate_group_rows(
+    connection: sqlite3.Connection, query: DuplicateGroupQueryDescription
+) -> Generator[sqlite3.Row, None, None]:
+    """Yield duplicate group rows and close the cursor reliably."""
+    compiled = compile_duplicate_groups(query)
+    cursor = connection.execute(compiled.statement, compiled.parameters)
+    try:
+        yield from cursor
+    finally:
+        cursor.close()
+
+
+def iter_duplicate_group_members(
+    connection: sqlite3.Connection,
+    query: DuplicateGroupQueryDescription,
+    content_id: ContentId,
+) -> Generator[FileObservation, None, None]:
+    """Yield members for one pinned group and close its cursor reliably."""
+    compiled = compile_duplicate_group_members(query, content_id)
+    cursor = connection.execute(compiled.statement, compiled.parameters)
+    try:
+        for row in cursor:
+            yield _materialize_file_observation(query.location, row)
+    finally:
+        cursor.close()
 
 
 def execute_duplicate_summary(

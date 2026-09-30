@@ -175,6 +175,22 @@ Inspect duplicate groups with bounded member output:
 uv run archiver catalog duplicates C:\path\to\root --details --group-limit 20 --member-limit 20
 ```
 
+Library callers can process every duplicate observation incrementally while
+keeping group/member previews bounded by default:
+
+```python
+from contextlib import closing
+
+from archiver.query import duplicate
+
+query = catalog.duplicates(root).sort(duplicate.redundant_bytes.desc())
+with closing(query.stream_all()) as groups:
+    for group in groups:
+        with closing(group.stream_all_members()) as members:
+            for member in members:
+                print(group.content_id, member.relative_path)
+```
+
 Manage content-level tags through a current path or SHA-256 digest:
 
 ```powershell
