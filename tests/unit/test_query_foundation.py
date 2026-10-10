@@ -13,7 +13,7 @@ def test_current_observation_query_is_immutable_and_domain_only(tmp_path: Path) 
     location = Location(id=7, root=tmp_path / "source")
     query = CurrentObservationQuery(location=location)
 
-    assert tuple(field.name for field in fields(query)) == ("location", "predicates", "ordering", "limit")
+    assert tuple(field.name for field in fields(query)) == ("location", "scan_id", "predicates", "ordering", "limit")
     assert query.location == location
     assert query.predicates == ()
     assert query.limit is None

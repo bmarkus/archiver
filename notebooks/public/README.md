@@ -32,6 +32,7 @@ notebook has been reviewed or approved.
 | [Plan 004.4 grouped duplicate queries](plan-004.4-grouped-queries-and-duplicates.ipynb) | Demonstrates bounded duplicate groups, bounded member previews, complete group metrics, summaries, and deterministic ordering. |
 | [Plan 004.4.1 duplicate group streaming](plan-004.4.1-duplicate-group-streaming.ipynb) | Adds typed duplicate-group sorting and bounded or explicit unbounded group/member streaming with safe early closure. |
 | [Plan 004.5 tag and content predicates](plan-004.5-tag-and-content-predicates.ipynb) | Composes exact content and active-tag predicates across current-file queries using the implemented public grammar. |
+| [Plan 004.6 existing read API migration](plan-004.6-existing-read-api-migration.ipynb) | Covers current-file details, catalog-wide content details, active tag vocabulary, retained exact/history reads, and migrated CLI parity. |
 | [Catalog query and stream lifecycle](query-stream-lifecycle.ipynb) | Explains catalogs, reusable queries, lazy cursor-backed streams, independent group/member cursors, retained handles, scan pinning, and cleanup. |
 
 The current public API reference is [the query grammar](../../docs/query-grammar.md).
@@ -62,4 +63,5 @@ record a notebook review. Validation and review are intentionally separate.
 | Plan 004.4 grouped duplicate queries | **Yes** | [Plan 004.4](../../docs/plans/004.4-grouped-queries-and-duplicates.md) records review on 2026-09-09 and includes the notebook in its validated outcome. |
 | Plan 004.4.1 duplicate group streaming | **Yes — approved** | The user explicitly reviewed and approved this notebook on 2026-09-30; recorded in [Plan 004.4.1](../../docs/plans/004.4.1-duplicate-group-sorting-and-streaming.md#review-and-completion). |
 | Plan 004.5 tag and content predicates | **Yes** | [Plan 004.5](../../docs/plans/004.5-tag-and-content-predicates.md) records review on 2026-09-29 and includes the notebook in its validated outcome. |
+| Plan 004.6 existing read API migration | No review record | This notebook is the post-implementation tutorial for Plans 004.6a–d; execution and validation are recorded in the implementation plan. |
 | Catalog query and stream lifecycle | **Yes — approved** | The user explicitly reviewed and approved this notebook on 2026-09-30; recorded in [Plan 004.4.1](../../docs/plans/004.4.1-duplicate-group-sorting-and-streaming.md#review-and-completion). |

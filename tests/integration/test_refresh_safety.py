@@ -33,7 +33,7 @@ def test_apply_refresh_rolls_back_after_late_duplicate_path_failure(tmp_path: Pa
 
     with Catalog.create(database_path) as catalog:
         catalog.scan_directory(root)
-        expected_current = catalog.current_files(root)
+        expected_current = list(catalog.files(root).stream_all())
         expected_scans = list(catalog.scan_history())
         expected_history = list(catalog.observation_history())
         expected_counts = _table_counts(database_path)
@@ -57,13 +57,13 @@ def test_apply_refresh_rolls_back_after_late_duplicate_path_failure(tmp_path: Pa
         with pytest.raises(RefreshFailure, match="could not apply refresh"):
             catalog.apply_refresh(forged_change_set)
 
-        assert catalog.current_files(root) == expected_current
+        assert list(catalog.files(root).stream_all()) == expected_current
         assert list(catalog.scan_history()) == expected_scans
         assert list(catalog.observation_history()) == expected_history
         assert _table_counts(database_path) == expected_counts
 
     with Catalog.open(database_path) as reopened:
-        assert reopened.current_files(root) == expected_current
+        assert list(reopened.files(root).stream_all()) == expected_current
         assert list(reopened.scan_history()) == expected_scans
         assert list(reopened.observation_history()) == expected_history
         assert _table_counts(database_path) == expected_counts
@@ -77,8 +77,9 @@ def test_apply_refresh_rolls_back_contradictory_content_size(tmp_path: Path) -> 
 
     with Catalog.create(database_path) as catalog:
         catalog.scan_directory(root)
-        seed = catalog.current_files(root)[0]
-        expected_current = catalog.current_files(root)
+        seed = catalog.files(root).first()
+        assert seed is not None
+        expected_current = list(catalog.files(root).stream_all())
         expected_counts = _table_counts(database_path)
         (root / "a-first.txt").write_bytes(b"first")
         (root / "z-conflict.txt").write_bytes(b"conflict")
@@ -105,11 +106,11 @@ def test_apply_refresh_rolls_back_contradictory_content_size(tmp_path: Path) -> 
         with pytest.raises(RefreshFailure, match="contradictory sizes"):
             catalog.apply_refresh(forged_change_set)
 
-        assert catalog.current_files(root) == expected_current
+        assert list(catalog.files(root).stream_all()) == expected_current
         assert _table_counts(database_path) == expected_counts
 
     with Catalog.open(database_path) as reopened:
-        assert reopened.current_files(root) == expected_current
+        assert list(reopened.files(root).stream_all()) == expected_current
         assert _table_counts(database_path) == expected_counts
 
 
@@ -124,7 +125,7 @@ def test_stale_refresh_application_creates_no_rows(tmp_path: Path) -> None:
         catalog.apply_refresh(first_change_set)
         stale_change_set = catalog.reconcile_directory(root)
         catalog.scan_directory(root)
-        expected_current = catalog.current_files(root)
+        expected_current = list(catalog.files(root).stream_all())
         expected_scans = list(catalog.scan_history())
         expected_history = list(catalog.observation_history())
         expected_counts = _table_counts(database_path)
@@ -132,7 +133,7 @@ def test_stale_refresh_application_creates_no_rows(tmp_path: Path) -> None:
         with pytest.raises(StaleRefreshError, match="no longer matches"):
             catalog.apply_refresh(stale_change_set)
 
-        assert catalog.current_files(root) == expected_current
+        assert list(catalog.files(root).stream_all()) == expected_current
         assert list(catalog.scan_history()) == expected_scans
         assert list(catalog.observation_history()) == expected_history
         assert _table_counts(database_path) == expected_counts
@@ -149,7 +150,7 @@ def test_apply_refresh_persists_captured_snapshot_then_detects_later_source_chan
         entry.write_bytes(b"after")
         catalog.apply_refresh(change_set)
 
-        current = catalog.current_files(root)
+        current = list(catalog.files(root).stream_all())
         assert len(current) == 1
         assert current[0].content_id.digest == sha256(b"before").hexdigest()
         assert current[0].size_bytes == len(b"before")

@@ -2,69 +2,77 @@
 
 from __future__ import annotations
 
-import re
 import sqlite3
 from collections.abc import Callable, Collection, Iterator
 from contextlib import closing, suppress
 from pathlib import Path, PurePosixPath
 from time import monotonic, time_ns
-from typing import cast
 from uuid import uuid4
 
-from ._query import CurrentObservationQuery, DuplicateGroupQueryDescription
+from ._query import (
+    ContentQueryDescription,
+    CurrentObservationQuery,
+    DuplicateGroupQueryDescription,
+    TagVocabularyQueryDescription,
+)
 from ._sqlite_query import (
+    execute_content_count,
+    execute_content_current_path_count,
+    execute_content_details,
+    execute_content_for_current_path,
+    execute_content_record,
+    execute_contents,
     execute_current_observation_count,
     execute_current_observation_distinct_content_count,
+    execute_current_observation_tag_views,
     execute_current_observation_total_size,
+    execute_current_scan,
     execute_duplicate_groups,
     execute_duplicate_summary,
     execute_first_current_observation,
+    execute_scan_summary,
+    execute_tag_vocabulary,
+    execute_tag_vocabulary_count,
+    execute_tags_for_content,
     iter_current_observations,
     iter_duplicate_group_members,
     iter_duplicate_group_rows,
+    iter_observation_history,
+    iter_scan_history,
 )
 from .errors import InvalidCatalogError, RefreshFailure, ScanFailure, StaleRefreshError, TaggingError
 from .filesystem import regular_files
 from .hashing import hash_file_stably
 from .models import (
-    AvailableTagSearch,
-    AvailableTagSort,
     ContentId,
+    ContentRecord,
     ContentTagAssertion,
     ContentTagView,
-    CurrentFileSearch,
-    CurrentFileSort,
     CurrentFileTagView,
     DuplicateGroupView,
     DuplicateSummary,
     FileObservation,
     HistoricalObservation,
     Location,
-    MultiTagContentSearch,
     RefreshChange,
     RefreshChangeKind,
     RefreshChangeSet,
     ScanProgress,
     ScanRun,
     ScanSummary,
-    TagAwareCurrentFileSearch,
-    TaggedContent,
-    TaggedContentSearch,
-    TagMatchMode,
     TagProvenance,
-    TagProvenanceKind,
     TagUsage,
     validate_tag_name,
 )
 from .query import (
+    ContentDetailQuery,
+    ContentQuery,
     CurrentFileQuery,
+    CurrentFileTagQuery,
     DuplicateGroupHandle,
     DuplicateGroupQuery,
-    SortExpression,
+    TagVocabularyQuery,
     duplicate,
-    mtime,
-    path,
-    size,
 )
 
 SCHEMA_VERSION = 2
@@ -525,29 +533,7 @@ class Catalog:
     def tags_for_content(self, content_id: ContentId) -> tuple[ContentTagAssertion, ...]:
         """Return active assertions for known content in deterministic order."""
         content_row_id, _ = self._content_record(content_id)
-        rows = self._connection.execute(
-            """
-            SELECT
-                tags.name AS tag_name,
-                assertions.provenance_kind AS provenance_kind,
-                assertions.source_name AS source_name,
-                assertions.source_version AS source_version,
-                assertions.source_detail AS source_detail,
-                assertions.asserted_at_ns AS asserted_at_ns
-            FROM content_tag_assertions AS assertions
-            JOIN tags ON tags.id = assertions.tag_id
-            WHERE assertions.content_id = ? AND assertions.retracted_at_ns IS NULL
-            ORDER BY
-                tags.name,
-                assertions.provenance_kind,
-                assertions.source_name,
-                assertions.source_version,
-                assertions.source_detail,
-                assertions.asserted_at_ns
-            """,
-            (content_row_id,),
-        )
-        return tuple(self._tag_assertion_from_row(row, content_id) for row in rows)
+        return execute_tags_for_content(self._connection, content_row_id, content_id)
 
     def content_for_path(self, root: Path, relative_path: PurePosixPath) -> ContentId:
         """Resolve a current relative path to its content identity."""
@@ -557,370 +543,72 @@ class Catalog:
         """Return active content tags resolved through a current relative path."""
         return self.tags_for_content(self._content_for_current_path(root, relative_path))
 
-    def search_available_tags(
-        self,
-        *,
-        name_regex: str | None = None,
-        provenance: TagProvenanceKind | None = None,
-        sort_by: AvailableTagSort = "name",
-        reverse: bool = False,
-        limit: int = 20,
-    ) -> AvailableTagSearch:
-        """Return bounded catalog-wide active tag usage counts."""
-        compiled_regex = None if name_regex is None else re.compile(name_regex)
-        if provenance not in (None, "user", "system"):
-            raise ValueError("provenance must be 'user', 'system', or None")
-        if sort_by not in ("name", "content", "assertions"):
-            raise ValueError(f"unsupported available-tag sort: {sort_by}")
-        if limit < 1:
-            raise ValueError("limit must be at least 1")
+    def contents(self) -> ContentQuery:
+        """Create a lazy, bounded query over every persisted content identity."""
+        return ContentQuery(_catalog=self)
 
-        provenance_clause = "" if provenance is None else "AND assertions.provenance_kind = ?"
-        parameters: tuple[object, ...] = () if provenance is None else (provenance,)
-        regex_clause = "" if compiled_regex is None else f"WHERE {_TAG_NAME_REGEX_FUNCTION}(tag_name)"
-        usage_cte = f"""
-            WITH tag_usage AS (
-                SELECT
-                    tags.name AS tag_name,
-                    COUNT(DISTINCT assertions.content_id) AS content_count,
-                    COUNT(*) AS assertion_count,
-                    SUM(assertions.provenance_kind = 'user') AS user_assertion_count,
-                    SUM(assertions.provenance_kind = 'system') AS system_assertion_count
-                FROM content_tag_assertions AS assertions
-                JOIN tags ON tags.id = assertions.tag_id
-                WHERE assertions.retracted_at_ns IS NULL
-                  {provenance_clause}
-                GROUP BY tags.id, tags.name
-            )
-        """
-        order_column = {
-            "name": "tag_name",
-            "content": "content_count",
-            "assertions": "assertion_count",
-        }[sort_by]
-        default_direction = "ASC" if sort_by == "name" else "DESC"
-        direction = self._reverse_direction(default_direction) if reverse else default_direction
-        tie_breaker = "" if sort_by == "name" else ", tag_name ASC"
+    def tags(self) -> TagVocabularyQuery:
+        """Create a lazy, bounded active-tag vocabulary query."""
+        return TagVocabularyQuery(_catalog=self)
 
-        if compiled_regex is not None:
-
-            def matches_tag_name(tag_name: str) -> int:
-                return int(compiled_regex.search(tag_name) is not None)
-
-            self._connection.create_function(
-                _TAG_NAME_REGEX_FUNCTION,
-                1,
-                matches_tag_name,
-                deterministic=True,
-            )
-        try:
-            count_row = self._connection.execute(
-                f"""
-                {usage_cte}
-                SELECT COUNT(*) AS total_matches
-                FROM tag_usage
-                {regex_clause}
-                """,
-                parameters,
-            ).fetchone()
-            assert count_row is not None
-            rows = self._connection.execute(
-                f"""
-                {usage_cte}
-                SELECT
-                    tag_name,
-                    content_count,
-                    assertion_count,
-                    user_assertion_count,
-                    system_assertion_count
-                FROM tag_usage
-                {regex_clause}
-                ORDER BY {order_column} {direction}{tie_breaker}
-                LIMIT ?
-                """,
-                (*parameters, limit),
-            )
-            tags = tuple(self._tag_usage_from_row(row) for row in rows)
-        finally:
-            if compiled_regex is not None:
-                self._connection.create_function(_TAG_NAME_REGEX_FUNCTION, 1, None)
-        return AvailableTagSearch(tags=tags, total_matches=int(count_row["total_matches"]))
-
-    def search_tagged_content(
-        self,
-        tag: str,
-        *,
-        provenance: TagProvenanceKind | None = None,
-        limit: int = 20,
-    ) -> TaggedContentSearch:
-        """Return bounded content identities with one active tag assertion."""
-        canonical_tag = validate_tag_name(tag)
-        if provenance not in (None, "user", "system"):
-            raise ValueError("provenance must be 'user', 'system', or None")
-        if limit < 1:
-            raise ValueError("limit must be at least 1")
-        provenance_clause = "" if provenance is None else "AND assertions.provenance_kind = ?"
-        parameters: list[object] = [canonical_tag]
-        if provenance is not None:
-            parameters.append(provenance)
-        count_row = self._connection.execute(
-            f"""
-            SELECT COUNT(DISTINCT assertions.content_id) AS total_matches
-            FROM content_tag_assertions AS assertions
-            JOIN tags ON tags.id = assertions.tag_id
-            WHERE tags.name = ? AND assertions.retracted_at_ns IS NULL {provenance_clause}
-            """,
-            parameters,
-        ).fetchone()
-        assert count_row is not None
-        content_rows = tuple(
-            self._connection.execute(
-                f"""
-                SELECT DISTINCT
-                    content.id AS content_row_id,
-                    content.algorithm AS algorithm,
-                    content.digest AS digest,
-                    content.size_bytes AS size_bytes
-                FROM content
-                JOIN content_tag_assertions AS assertions ON assertions.content_id = content.id
-                JOIN tags ON tags.id = assertions.tag_id
-                WHERE tags.name = ? AND assertions.retracted_at_ns IS NULL {provenance_clause}
-                ORDER BY content.algorithm, content.digest
-                LIMIT ?
-                """,
-                (*parameters, limit),
-            )
-        )
-        if not content_rows:
-            return TaggedContentSearch(contents=(), total_matches=int(count_row["total_matches"]))
-        content_ids = {
-            int(row["content_row_id"]): ContentId(algorithm=str(row["algorithm"]), digest=str(row["digest"]))
-            for row in content_rows
-        }
-        placeholders = ", ".join("?" for _ in content_rows)
-        assertion_parameters: list[object] = [canonical_tag, *content_ids]
-        assertion_provenance_clause = ""
-        if provenance is not None:
-            assertion_provenance_clause = "AND assertions.provenance_kind = ?"
-            assertion_parameters.append(provenance)
-        assertion_rows = self._connection.execute(
-            f"""
-            SELECT
-                assertions.content_id AS content_row_id,
-                tags.name AS tag_name,
-                assertions.provenance_kind AS provenance_kind,
-                assertions.source_name AS source_name,
-                assertions.source_version AS source_version,
-                assertions.source_detail AS source_detail,
-                assertions.asserted_at_ns AS asserted_at_ns
-            FROM content_tag_assertions AS assertions
-            JOIN tags ON tags.id = assertions.tag_id
-            WHERE tags.name = ?
-              AND assertions.content_id IN ({placeholders})
-              AND assertions.retracted_at_ns IS NULL
-              {assertion_provenance_clause}
-            ORDER BY
-                assertions.content_id,
-                assertions.provenance_kind,
-                assertions.source_name,
-                assertions.source_version,
-                assertions.source_detail,
-                assertions.asserted_at_ns
-            """,
-            assertion_parameters,
-        )
-        assertions_by_content: dict[int, list[ContentTagAssertion]] = {row_id: [] for row_id in content_ids}
-        for row in assertion_rows:
-            row_id = int(row["content_row_id"])
-            assertions_by_content[row_id].append(self._tag_assertion_from_row(row, content_ids[row_id]))
-        contents = tuple(
-            TaggedContent(
-                content_id=content_ids[int(row["content_row_id"])],
-                size_bytes=int(row["size_bytes"]),
-                assertions=tuple(assertions_by_content[int(row["content_row_id"])]),
-            )
-            for row in content_rows
-        )
-        return TaggedContentSearch(contents=contents, total_matches=int(count_row["total_matches"]))
-
-    def search_content_by_tags(
-        self,
-        root: Path,
-        tags: Collection[str],
-        *,
-        match: TagMatchMode = "all",
-        provenance: TagProvenanceKind | None = None,
-        limit: int = 20,
-        path_limit: int = 20,
-        tag_limit: int | None = 3,
-    ) -> MultiTagContentSearch:
-        """Return bounded content matching active tags with root-scoped path previews."""
-        canonical_tags = tuple(dict.fromkeys(validate_tag_name(tag) for tag in tags))
-        if not canonical_tags:
-            raise ValueError("at least one tag is required")
-        if match not in ("all", "any"):
-            raise ValueError("match must be 'all' or 'any'")
-        if provenance not in (None, "user", "system"):
-            raise ValueError("provenance must be 'user', 'system', or None")
-        if limit < 1:
-            raise ValueError("limit must be at least 1")
-        if path_limit < 1:
-            raise ValueError("path_limit must be at least 1")
-        if tag_limit is not None and tag_limit < 1:
-            raise ValueError("tag_limit must be at least 1 or None")
-
-        location = self._location_for_root(root)
-        location_id = None if location is None else location.id
-        tag_placeholders = ", ".join("?" for _ in canonical_tags)
-        provenance_clause = "" if provenance is None else "AND assertions.provenance_kind = ?"
-        matching_parameters: list[object] = list(canonical_tags)
-        if provenance is not None:
-            matching_parameters.append(provenance)
-        matching_parameters.append(len(canonical_tags) if match == "all" else 1)
-        matching_content_cte = f"""
-            matching_content AS (
-                SELECT assertions.content_id
-                FROM content_tag_assertions AS assertions
-                JOIN tags ON tags.id = assertions.tag_id
-                WHERE assertions.retracted_at_ns IS NULL
-                  AND tags.name IN ({tag_placeholders})
-                  {provenance_clause}
-                GROUP BY assertions.content_id
-                HAVING COUNT(DISTINCT tags.name) >= ?
-            )
-        """
-
-        total_row = self._connection.execute(
-            f"""
-            WITH {matching_content_cte}
-            SELECT
-                COUNT(DISTINCT matching_content.content_id) AS total_matches,
-                COUNT(observations.id) AS total_current_paths
-            FROM matching_content
-            LEFT JOIN locations ON locations.id = ?
-            LEFT JOIN file_observations AS observations
-              ON observations.scan_id = locations.current_scan_id
-             AND observations.content_id = matching_content.content_id
-            """,
-            (*matching_parameters, location_id),
-        ).fetchone()
-        assert total_row is not None
-
-        content_rows = tuple(
-            self._connection.execute(
-                f"""
-                WITH {matching_content_cte}
-                SELECT
-                    content.id AS content_row_id,
-                    content.algorithm AS algorithm,
-                    content.digest AS digest,
-                    content.size_bytes AS size_bytes
-                FROM matching_content
-                JOIN content ON content.id = matching_content.content_id
-                ORDER BY content.algorithm, content.digest
-                LIMIT ?
-                """,
-                (*matching_parameters, limit),
-            )
-        )
-        if not content_rows:
-            return MultiTagContentSearch(
-                contents=(),
-                total_matches=int(total_row["total_matches"]),
-                total_current_paths=int(total_row["total_current_paths"]),
-            )
-
-        content_ids = {
-            int(row["content_row_id"]): ContentId(algorithm=str(row["algorithm"]), digest=str(row["digest"]))
-            for row in content_rows
-        }
-        content_row_ids = tuple(content_ids)
-        content_placeholders = ", ".join("?" for _ in content_row_ids)
-        paths_by_content: dict[int, list[PurePosixPath]] = {row_id: [] for row_id in content_row_ids}
-        path_counts = {row_id: 0 for row_id in content_row_ids}
-        if location_id is not None:
-            path_rows = self._connection.execute(
-                f"""
-                WITH ranked_paths AS (
-                    SELECT
-                        observations.content_id AS content_row_id,
-                        observations.relative_path AS relative_path,
-                        COUNT(*) OVER (PARTITION BY observations.content_id) AS current_path_count,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY observations.content_id
-                            ORDER BY observations.relative_path
-                        ) AS path_rank
-                    FROM locations
-                    JOIN file_observations AS observations
-                      ON observations.scan_id = locations.current_scan_id
-                    WHERE locations.id = ?
-                      AND observations.content_id IN ({content_placeholders})
-                )
-                SELECT content_row_id, relative_path, current_path_count
-                FROM ranked_paths
-                WHERE path_rank <= ?
-                ORDER BY content_row_id, relative_path
-                """,
-                (location_id, *content_row_ids, path_limit),
-            )
-            for row in path_rows:
-                row_id = int(row["content_row_id"])
-                path_counts[row_id] = int(row["current_path_count"])
-                paths_by_content[row_id].append(PurePosixPath(str(row["relative_path"])))
-
-        tag_limit_clause = "" if tag_limit is None else "WHERE tag_rank <= ?"
-        tag_parameters: tuple[object, ...] = content_row_ids if tag_limit is None else (*content_row_ids, tag_limit)
-        tag_rows = self._connection.execute(
-            f"""
-            WITH distinct_active_tags AS (
-                SELECT DISTINCT assertions.content_id AS content_row_id, tags.name AS tag_name
-                FROM content_tag_assertions AS assertions
-                JOIN tags ON tags.id = assertions.tag_id
-                WHERE assertions.retracted_at_ns IS NULL
-                  AND assertions.content_id IN ({content_placeholders})
-            ),
-            ranked_tags AS (
-                SELECT
-                    content_row_id,
-                    tag_name,
-                    COUNT(*) OVER (PARTITION BY content_row_id) AS active_tag_count,
-                    ROW_NUMBER() OVER (PARTITION BY content_row_id ORDER BY tag_name) AS tag_rank
-                FROM distinct_active_tags
-            )
-            SELECT content_row_id, tag_name, active_tag_count
-            FROM ranked_tags
-            {tag_limit_clause}
-            ORDER BY content_row_id, tag_name
-            """,
-            tag_parameters,
-        )
-        tags_by_content: dict[int, list[str]] = {row_id: [] for row_id in content_row_ids}
-        tag_counts = {row_id: 0 for row_id in content_row_ids}
-        for row in tag_rows:
-            row_id = int(row["content_row_id"])
-            tag_counts[row_id] = int(row["active_tag_count"])
-            tags_by_content[row_id].append(str(row["tag_name"]))
-
-        contents = tuple(
-            ContentTagView(
-                content_id=content_ids[int(row["content_row_id"])],
-                size_bytes=int(row["size_bytes"]),
-                current_path_count=path_counts[int(row["content_row_id"])],
-                current_paths=tuple(paths_by_content[int(row["content_row_id"])]),
-                active_tag_count=tag_counts[int(row["content_row_id"])],
-                tags=tuple(tags_by_content[int(row["content_row_id"])]),
-            )
-            for row in content_rows
-        )
-        return MultiTagContentSearch(
-            contents=contents,
-            total_matches=int(total_row["total_matches"]),
-            total_current_paths=int(total_row["total_current_paths"]),
+    @staticmethod
+    def _tag_vocabulary_description(query: TagVocabularyQuery, *, limit: int | None) -> TagVocabularyQueryDescription:
+        return TagVocabularyQueryDescription(
+            predicates=query.predicates,
+            ordering=query.ordering,
+            limit=limit,
+            provenance=query.provenance_kind,
         )
 
-    def current_files(self, root: Path) -> list[FileObservation]:
-        """Return the current files for one location in relative-path order."""
-        return list(self.files(root).stream_all())
+    def _fetch_tag_vocabulary_query(self, query: TagVocabularyQuery) -> tuple[TagUsage, ...]:
+        return execute_tag_vocabulary(
+            self._connection,
+            self._tag_vocabulary_description(query, limit=query.row_limit),
+        )
+
+    def _count_tag_vocabulary_query(self, query: TagVocabularyQuery) -> int:
+        return execute_tag_vocabulary_count(
+            self._connection,
+            self._tag_vocabulary_description(query, limit=None),
+        )
+
+    def _content_query_description(self, query: ContentQuery, *, limit: int | None) -> ContentQueryDescription:
+        return ContentQueryDescription(predicates=query.predicates, limit=limit)
+
+    def _fetch_content_query(self, query: ContentQuery) -> tuple[ContentRecord, ...]:
+        return execute_contents(
+            self._connection,
+            self._content_query_description(query, limit=query.row_limit),
+        )
+
+    def _count_content_query(self, query: ContentQuery) -> int:
+        return execute_content_count(self._connection, self._content_query_description(query, limit=None))
+
+    def _content_detail_scope(self, query: ContentDetailQuery) -> tuple[Location | None, int | None]:
+        location = self._location_for_canonical_root(query.root)
+        if location is None:
+            return None, None
+        assert location.id is not None
+        return location, self._current_scan_id(location.id)
+
+    def _fetch_content_detail_query(self, query: ContentDetailQuery) -> tuple[ContentTagView, ...]:
+        location, scan_id = self._content_detail_scope(query)
+        return execute_content_details(
+            self._connection,
+            self._content_query_description(query.base, limit=query.base.row_limit),
+            location=location,
+            scan_id=scan_id,
+            path_limit=query.path_limit,
+            tag_limit=None if query.all_tags else query.tag_limit,
+        )
+
+    def _count_content_detail_paths(self, query: ContentDetailQuery) -> int:
+        _, scan_id = self._content_detail_scope(query)
+        return execute_content_current_path_count(
+            self._connection,
+            self._content_query_description(query.base, limit=None),
+            scan_id=scan_id,
+        )
 
     def files(self, root: Path) -> CurrentFileQuery:
         """Create a lazy, bounded query over one root's current observations.
@@ -934,6 +622,16 @@ class Catalog:
 
     def _fetch_current_file_query(self, query: CurrentFileQuery) -> tuple[FileObservation, ...]:
         return tuple(self._stream_current_file_query(query, limit=query.row_limit))
+
+    def _fetch_current_file_tag_query(self, query: CurrentFileTagQuery) -> tuple[CurrentFileTagView, ...]:
+        internal_query = self._current_observation_query(query.base, limit=query.base.row_limit)
+        if internal_query is None:
+            return ()
+        return execute_current_observation_tag_views(
+            self._connection,
+            internal_query,
+            tag_limit=None if query.all_tags else query.tag_limit,
+        )
 
     def _first_current_file_query(self, query: CurrentFileQuery) -> FileObservation | None:
         internal_query = self._current_observation_query(query, limit=None)
@@ -966,219 +664,16 @@ class Catalog:
         location = self._location_for_canonical_root(query.root)
         if location is None:
             return None
+        assert location.id is not None
+        scan_id = self._current_scan_id(location.id)
+        if scan_id is None:
+            return None
         return CurrentObservationQuery(
             location=location,
+            scan_id=scan_id,
             predicates=query.predicates,
             ordering=query.ordering,
             limit=limit,
-        )
-
-    def search_current_files(
-        self,
-        root: Path,
-        *,
-        path_glob: str | None = None,
-        sort_by: CurrentFileSort = "path",
-        reverse: bool = False,
-        limit: int = 20,
-    ) -> CurrentFileSearch:
-        """Return a bounded, deterministically ordered query over one location's current files."""
-        if limit < 1:
-            raise ValueError("limit must be at least 1")
-        query = self.files(root)
-        if self._location_for_canonical_root(query.root) is None:
-            return CurrentFileSearch(files=(), total_matches=0, total_size_bytes=0)
-
-        query = query.sort(self._current_file_query_order(sort_by, reverse)).limit(limit)
-        if path_glob is not None:
-            query = query.where(path.glob(path_glob))
-        return CurrentFileSearch(
-            files=query.fetch(),
-            total_matches=query.count(),
-            total_size_bytes=query.total_size_bytes(),
-        )
-
-    def search_current_files_with_tags(
-        self,
-        root: Path,
-        *,
-        path_glob: str | None = None,
-        tags: Collection[str] = (),
-        match: TagMatchMode = "all",
-        provenance: TagProvenanceKind | None = None,
-        sort_by: CurrentFileSort = "path",
-        reverse: bool = False,
-        limit: int = 20,
-        tag_limit: int | None = 3,
-    ) -> TagAwareCurrentFileSearch:
-        """Return bounded current files with tag filtering and active-tag previews."""
-        canonical_tags = tuple(dict.fromkeys(validate_tag_name(tag) for tag in tags))
-        if match not in ("all", "any"):
-            raise ValueError("match must be 'all' or 'any'")
-        if provenance not in (None, "user", "system"):
-            raise ValueError("provenance must be 'user', 'system', or None")
-        if provenance is not None and not canonical_tags:
-            raise ValueError("provenance requires at least one tag")
-        if limit < 1:
-            raise ValueError("limit must be at least 1")
-        if tag_limit is not None and tag_limit < 1:
-            raise ValueError("tag_limit must be at least 1 or None")
-
-        order_column, default_direction = self._current_file_order(sort_by)
-        direction = self._reverse_direction(default_direction) if reverse else default_direction
-        location = self._location_for_root(root)
-        if location is None:
-            return TagAwareCurrentFileSearch(
-                files=(),
-                total_file_count=0,
-                total_content_count=0,
-                total_file_size_bytes=0,
-            )
-
-        matching_content_cte = ""
-        matching_content_clause = ""
-        matching_parameters: list[object] = []
-        if canonical_tags:
-            tag_placeholders = ", ".join("?" for _ in canonical_tags)
-            provenance_clause = "" if provenance is None else "AND assertions.provenance_kind = ?"
-            matching_parameters.extend(canonical_tags)
-            if provenance is not None:
-                matching_parameters.append(provenance)
-            matching_parameters.append(len(canonical_tags) if match == "all" else 1)
-            matching_content_cte = f"""
-                WITH matching_content AS (
-                    SELECT assertions.content_id
-                    FROM content_tag_assertions AS assertions
-                    JOIN tags ON tags.id = assertions.tag_id
-                    WHERE assertions.retracted_at_ns IS NULL
-                      AND tags.name IN ({tag_placeholders})
-                      {provenance_clause}
-                    GROUP BY assertions.content_id
-                    HAVING COUNT(DISTINCT tags.name) >= ?
-                )
-            """
-            matching_content_clause = " AND observations.content_id IN (SELECT content_id FROM matching_content)"
-
-        where_clause = f"WHERE scans.location_id = ? AND scans.id = locations.current_scan_id{matching_content_clause}"
-        parameters: list[object] = [*matching_parameters, location.id]
-        if path_glob is not None:
-            where_clause += " AND observations.relative_path GLOB ?"
-            parameters.append(path_glob)
-
-        count_row = self._connection.execute(
-            f"""
-            {matching_content_cte}
-            SELECT
-                COUNT(*) AS total_file_count,
-                COUNT(DISTINCT observations.content_id) AS total_content_count,
-                COALESCE(SUM(observations.size_bytes), 0) AS total_file_size_bytes
-            FROM file_observations AS observations
-            JOIN scan_runs AS scans ON scans.id = observations.scan_id
-            JOIN locations ON locations.id = scans.location_id
-            {where_clause}
-            """,
-            parameters,
-        ).fetchone()
-        assert count_row is not None
-
-        rows = tuple(
-            self._connection.execute(
-                f"""
-                {matching_content_cte}
-                SELECT
-                    observations.relative_path AS relative_path,
-                    observations.size_bytes AS size_bytes,
-                    observations.mtime_ns AS mtime_ns,
-                    content.id AS content_row_id,
-                    content.algorithm AS algorithm,
-                    content.digest AS digest
-                FROM file_observations AS observations
-                JOIN scan_runs AS scans ON scans.id = observations.scan_id
-                JOIN locations ON locations.id = scans.location_id
-                JOIN content ON content.id = observations.content_id
-                {where_clause}
-                ORDER BY {order_column} {direction}, observations.relative_path ASC
-                LIMIT ?
-                """,
-                (*parameters, limit),
-            )
-        )
-        if not rows:
-            return TagAwareCurrentFileSearch(
-                files=(),
-                total_file_count=int(count_row["total_file_count"]),
-                total_content_count=int(count_row["total_content_count"]),
-                total_file_size_bytes=int(count_row["total_file_size_bytes"]),
-            )
-
-        content_row_ids = tuple(dict.fromkeys(int(row["content_row_id"]) for row in rows))
-        content_placeholders = ", ".join("?" for _ in content_row_ids)
-        tag_limit_clause = "" if tag_limit is None else "WHERE tag_rank <= ?"
-        tag_parameters: tuple[object, ...] = content_row_ids if tag_limit is None else (*content_row_ids, tag_limit)
-        tag_rows = self._connection.execute(
-            f"""
-            WITH distinct_active_tags AS (
-                SELECT DISTINCT assertions.content_id AS content_row_id, tags.name AS tag_name
-                FROM content_tag_assertions AS assertions
-                JOIN tags ON tags.id = assertions.tag_id
-                WHERE assertions.retracted_at_ns IS NULL
-                  AND assertions.content_id IN ({content_placeholders})
-            ),
-            ranked_tags AS (
-                SELECT
-                    content_row_id,
-                    tag_name,
-                    COUNT(*) OVER (PARTITION BY content_row_id) AS active_tag_count,
-                    ROW_NUMBER() OVER (PARTITION BY content_row_id ORDER BY tag_name) AS tag_rank
-                FROM distinct_active_tags
-            )
-            SELECT content_row_id, tag_name, active_tag_count
-            FROM ranked_tags
-            {tag_limit_clause}
-            ORDER BY content_row_id, tag_name
-            """,
-            tag_parameters,
-        )
-        tags_by_content: dict[int, list[str]] = {row_id: [] for row_id in content_row_ids}
-        tag_counts = {row_id: 0 for row_id in content_row_ids}
-        for row in tag_rows:
-            row_id = int(row["content_row_id"])
-            tag_counts[row_id] = int(row["active_tag_count"])
-            tags_by_content[row_id].append(str(row["tag_name"]))
-
-        files = tuple(
-            CurrentFileTagView(
-                observation=FileObservation(
-                    location=location,
-                    relative_path=PurePosixPath(str(row["relative_path"])),
-                    content_id=ContentId(algorithm=str(row["algorithm"]), digest=str(row["digest"])),
-                    size_bytes=int(row["size_bytes"]),
-                    mtime_ns=int(row["mtime_ns"]),
-                ),
-                active_tag_count=tag_counts[int(row["content_row_id"])],
-                tags=tuple(tags_by_content[int(row["content_row_id"])]),
-            )
-            for row in rows
-        )
-        return TagAwareCurrentFileSearch(
-            files=files,
-            total_file_count=int(count_row["total_file_count"]),
-            total_content_count=int(count_row["total_content_count"]),
-            total_file_size_bytes=int(count_row["total_file_size_bytes"]),
-        )
-
-    def find_by_content(self, root: Path, content_id: ContentId) -> list[FileObservation]:
-        """Return current observations at one location with a supplied content identity."""
-        location = self._location_for_root(root)
-        if location is None:
-            return []
-        return self._observations_for_query(
-            """
-            WHERE scans.location_id = ? AND scans.id = locations.current_scan_id
-              AND content.algorithm = ? AND content.digest = ?
-            ORDER BY observations.relative_path
-            """,
-            (location.id, content_id.algorithm, content_id.digest),
         )
 
     def duplicates(self, root: Path) -> DuplicateGroupQuery:
@@ -1251,22 +746,7 @@ class Catalog:
         location = self._location_for_root(root)
         if location is None:
             return None
-        row = self._connection.execute(
-            """
-            SELECT
-                scans.id AS scan_id,
-                locations.id AS location_id,
-                locations.root_path AS root_path,
-                scans.status AS scan_status,
-                scans.started_at_ns AS started_at_ns,
-                scans.completed_at_ns AS completed_at_ns
-            FROM locations
-            JOIN scan_runs AS scans ON scans.id = locations.current_scan_id
-            WHERE locations.id = ?
-            """,
-            (location.id,),
-        ).fetchone()
-        return None if row is None else self._scan_run_from_row(row)
+        return execute_current_scan(self._connection, location)
 
     def current_summary(self, root: Path) -> ScanSummary | None:
         """Return the summary for the current successful scan, if one exists."""
@@ -1278,63 +758,30 @@ class Catalog:
 
         The catalog must remain open while consuming the iterator.
         """
-        cursor = self._connection.execute(
-            """
-            SELECT
-                scans.id AS scan_id,
-                locations.id AS location_id,
-                locations.root_path AS root_path,
-                scans.status AS scan_status,
-                scans.started_at_ns AS started_at_ns,
-                scans.completed_at_ns AS completed_at_ns
-            FROM scan_runs AS scans
-            JOIN locations ON locations.id = scans.location_id
-            ORDER BY locations.root_path, scans.id
-            """
-        )
-        for row in cursor:
-            yield self._scan_run_from_row(row)
+        yield from iter_scan_history(self._connection)
 
     def observation_history(self) -> Iterator[HistoricalObservation]:
         """Yield every persisted file observation in deterministic history order.
 
         The catalog must remain open while consuming the iterator.
         """
-        yield from self._historical_observations_for_query(
-            "ORDER BY locations.root_path, scans.id, observations.relative_path",
-            (),
-        )
+        yield from iter_observation_history(self._connection)
 
     def _content_record(self, content_id: ContentId) -> tuple[int, int]:
-        row = self._connection.execute(
-            "SELECT id, size_bytes FROM content WHERE algorithm = ? AND digest = ?",
-            (content_id.algorithm, content_id.digest),
-        ).fetchone()
-        if row is None:
+        record = execute_content_record(self._connection, content_id)
+        if record is None:
             raise TaggingError(f"content is not known to this catalog: {content_id.algorithm}:{content_id.digest}")
-        return int(row["id"]), int(row["size_bytes"])
+        return record
 
     def _content_for_current_path(self, root: Path, relative_path: PurePosixPath) -> ContentId:
         canonical_path = self._validated_relative_path(relative_path)
         location = self._location_for_root(root)
         if location is None:
             raise TaggingError(f"catalog has no current path: {canonical_path.as_posix()}")
-        row = self._connection.execute(
-            """
-            SELECT content.algorithm AS algorithm, content.digest AS digest
-            FROM file_observations AS observations
-            JOIN scan_runs AS scans ON scans.id = observations.scan_id
-            JOIN locations ON locations.id = scans.location_id
-            JOIN content ON content.id = observations.content_id
-            WHERE locations.id = ?
-              AND scans.id = locations.current_scan_id
-              AND observations.relative_path = ?
-            """,
-            (location.id, canonical_path.as_posix()),
-        ).fetchone()
-        if row is None:
+        content_id = execute_content_for_current_path(self._connection, location, canonical_path)
+        if content_id is None:
             raise TaggingError(f"catalog has no current path: {canonical_path.as_posix()}")
-        return ContentId(algorithm=str(row["algorithm"]), digest=str(row["digest"]))
+        return content_id
 
     @staticmethod
     def _validated_relative_path(relative_path: PurePosixPath) -> PurePosixPath:
@@ -1342,54 +789,6 @@ class Catalog:
         if relative_path.is_absolute() or text in ("", ".") or ".." in relative_path.parts or "\\" in text:
             raise ValueError("tag path must be a non-empty POSIX relative path without parent traversal")
         return relative_path
-
-    @staticmethod
-    def _tag_usage_from_row(row: sqlite3.Row) -> TagUsage:
-        return TagUsage(
-            tag=str(row["tag_name"]),
-            content_count=int(row["content_count"]),
-            assertion_count=int(row["assertion_count"]),
-            user_assertion_count=int(row["user_assertion_count"]),
-            system_assertion_count=int(row["system_assertion_count"]),
-        )
-
-    @staticmethod
-    def _tag_assertion_from_row(row: sqlite3.Row, content_id: ContentId) -> ContentTagAssertion:
-        return ContentTagAssertion(
-            content_id=content_id,
-            tag=str(row["tag_name"]),
-            provenance=TagProvenance(
-                kind=cast(TagProvenanceKind, str(row["provenance_kind"])),
-                source_name=str(row["source_name"]),
-                source_version=str(row["source_version"]),
-                source_detail=str(row["source_detail"]),
-            ),
-            asserted_at_ns=int(row["asserted_at_ns"]),
-        )
-
-    @staticmethod
-    def _current_file_order(sort_by: CurrentFileSort) -> tuple[str, str]:
-        if sort_by == "path":
-            return "observations.relative_path", "ASC"
-        if sort_by == "size":
-            return "observations.size_bytes", "DESC"
-        if sort_by == "date":
-            return "observations.mtime_ns", "DESC"
-        raise ValueError(f"unsupported current-file sort: {sort_by}")
-
-    @staticmethod
-    def _current_file_query_order(sort_by: CurrentFileSort, reverse: bool) -> SortExpression:
-        if sort_by == "path":
-            return path.desc() if reverse else path.asc()
-        if sort_by == "size":
-            return size.asc() if reverse else size.desc()
-        if sort_by == "date":
-            return mtime.asc() if reverse else mtime.desc()
-        raise ValueError(f"unsupported current-file sort: {sort_by}")
-
-    @staticmethod
-    def _reverse_direction(direction: str) -> str:
-        return "DESC" if direction == "ASC" else "ASC"
 
     def _canonical_root(self, root: Path) -> Path:
         if root.is_symlink():
@@ -1506,30 +905,7 @@ class Catalog:
         return path.resolve(strict=False) in database_files
 
     def _scan_summary(self, scan_id: int) -> ScanSummary:
-        row = self._connection.execute(
-            """
-            SELECT
-                COUNT(*) AS files_observed,
-                COALESCE(SUM(size_bytes), 0) AS total_bytes_observed,
-                COUNT(DISTINCT content_id) AS distinct_content_count,
-                COUNT(DISTINCT CASE WHEN duplicate_group = 1 THEN content_id END)
-                    AS duplicate_content_group_count
-            FROM (
-                SELECT observations.*, CASE WHEN COUNT(*) OVER (PARTITION BY content_id) > 1
-                    THEN 1 ELSE 0 END AS duplicate_group
-                FROM file_observations AS observations
-                WHERE scan_id = ?
-            )
-            """,
-            (scan_id,),
-        ).fetchone()
-        assert row is not None
-        return ScanSummary(
-            files_observed=int(row["files_observed"]),
-            total_bytes_observed=int(row["total_bytes_observed"]),
-            distinct_content_count=int(row["distinct_content_count"]),
-            duplicate_content_group_count=int(row["duplicate_content_group_count"]),
-        )
+        return execute_scan_summary(self._connection, scan_id)
 
     def _current_observation_iterator(self, location: Location) -> Iterator[FileObservation]:
         """Stream one location's current observations in relative-path order."""
@@ -1554,63 +930,3 @@ class Catalog:
                 size_bytes=int(row["size_bytes"]),
                 mtime_ns=int(row["mtime_ns"]),
             )
-
-    def _observations_for_query(self, where_clause: str, parameters: tuple[object, ...]) -> list[FileObservation]:
-        """Return a filtered projection of the shared historical observation query."""
-        return [
-            FileObservation(
-                location=observation.scan.location,
-                relative_path=observation.relative_path,
-                content_id=observation.content_id,
-                size_bytes=observation.size_bytes,
-                mtime_ns=observation.mtime_ns,
-            )
-            for observation in self._historical_observations_for_query(where_clause, parameters)
-        ]
-
-    def _historical_observations_for_query(
-        self, where_clause: str, parameters: tuple[object, ...]
-    ) -> Iterator[HistoricalObservation]:
-        """Yield typed rows from the shared observation/scan/location/content join."""
-        cursor = self._connection.execute(
-            f"""
-            SELECT
-                scans.id AS scan_id,
-                locations.id AS location_id,
-                locations.root_path AS root_path,
-                scans.status AS scan_status,
-                scans.started_at_ns AS started_at_ns,
-                scans.completed_at_ns AS completed_at_ns,
-                observations.relative_path AS relative_path,
-                observations.size_bytes AS size_bytes,
-                observations.mtime_ns AS mtime_ns,
-                content.algorithm AS algorithm,
-                content.digest AS digest
-            FROM file_observations AS observations
-            JOIN scan_runs AS scans ON scans.id = observations.scan_id
-            JOIN locations ON locations.id = scans.location_id
-            JOIN content ON content.id = observations.content_id
-            {where_clause}
-            """,
-            parameters,
-        )
-        for row in cursor:
-            yield HistoricalObservation(
-                scan=self._scan_run_from_row(row),
-                relative_path=PurePosixPath(str(row["relative_path"])),
-                content_id=ContentId(algorithm=str(row["algorithm"]), digest=str(row["digest"])),
-                size_bytes=int(row["size_bytes"]),
-                mtime_ns=int(row["mtime_ns"]),
-            )
-
-    @staticmethod
-    def _scan_run_from_row(row: sqlite3.Row) -> ScanRun:
-        """Build a scan domain object from a joined scan/location row."""
-        completed_at_ns = row["completed_at_ns"]
-        return ScanRun(
-            id=int(row["scan_id"]),
-            location=Location(id=int(row["location_id"]), root=Path(str(row["root_path"]))),
-            status=str(row["scan_status"]),
-            started_at_ns=int(row["started_at_ns"]),
-            completed_at_ns=None if completed_at_ns is None else int(completed_at_ns),
-        )

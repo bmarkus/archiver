@@ -1,8 +1,8 @@
 # Public query grammar
 
-This document describes the supported public grammar for current file
-observations and duplicate-content groups. It is a usage reference, not an
-implementation plan.
+This document describes the supported public grammar for current files,
+duplicate-content groups, catalog-wide content, and active tag vocabulary. It
+is a usage reference, not an implementation plan.
 
 The [Plan 004.5 public tutorial](../notebooks/public/plan-004.5-tag-and-content-predicates.ipynb)
 demonstrates content and tag predicates with disposable synthetic files.
@@ -32,6 +32,8 @@ from archiver.query import content, duplicate, mtime, path, size, tags
 | `content` | `is_(content_id)` | Current files |
 | `tags` | `all_of(*names, provenance=None)`, `any_of(*names, provenance=None)` | Current files |
 | `duplicate` | `file_count.asc()`, `file_count.desc()`, `redundant_bytes.asc()`, `redundant_bytes.desc()` | Duplicate groups |
+| `tag_name` | `regex(source)`, `asc()`, `desc()` | Tag vocabulary |
+| `tag_usage` | `content_count.asc()/desc()`, `assertion_count.asc()/desc()` | Tag vocabulary |
 
 Pass predicates to `where()` and orderings to `sort()`. `path.glob()` matches
 the complete POSIX relative path; `content.is_()` matches a complete `ContentId`;
@@ -325,6 +327,36 @@ The earlier `duplicate_groups()`, `search_duplicate_groups()`,
 `duplicate_summary()`, and tuple-oriented `duplicate_groups_frame()` interfaces
 were retired when this grouped query was introduced. The duplicate CLI uses
 this query directly.
+
+## File tag details
+
+`catalog.files(root).with_tags(limit=3)` returns a `CurrentFileTagQuery` whose
+`fetch()` result contains `CurrentFileTagView` rows. Parent filtering, ordering,
+and bounds come from the base file query. Each selected content identity gets a
+complete active-tag count and an alphabetical preview; duplicate paths reuse
+the same preview. `all_tags=True` removes only the per-content preview bound.
+
+## Catalog-wide content
+
+`catalog.contents()` returns a bounded `ContentQuery` over every persisted
+content identity, including untagged and historical-only content. It accepts
+`content.is_(...)`, `tags.all_of(...)`, and `tags.any_of(...)`, has a default
+limit of 20, fixed full-identity ascending order, `fetch()`, and complete
+`count()`.
+
+Use `with_details(root=..., path_limit=20, tag_limit=3, all_tags=False)` for a
+`ContentDetailQuery`. The root scopes only current path counts/previews; content
+selection and active-tag previews remain catalog-wide. `current_path_count()`
+counts paths for every matching identity and ignores display bounds.
+
+## Active tag vocabulary
+
+`catalog.tags()` returns a bounded `TagVocabularyQuery` over canonical names
+with active assertions. `where(tag_name.regex(source))` uses Python
+`re.search`; repeated regex predicates are ANDed. Provenance scopes both
+inclusion and usage counts. Sorting supports tag name, distinct-content usage,
+and assertion usage. `fetch()` defaults to 20 names and `count()` returns the
+complete matching-name count.
 
 ## Current boundary
 

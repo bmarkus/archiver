@@ -2,8 +2,8 @@
 
 Plans record the evolution of Archiver's design and implementation.
 
-**Active plan:** None. [004.4.1 — Duplicate Group Sorting and Streaming](004.4.1-duplicate-group-sorting-and-streaming.md)
-is complete and approved. Do not begin 004.6a automatically.
+**Active plan:** None. [004.6 — Existing Read API Migration](004.6-existing-read-api-migration.md)
+is implemented. Do not begin 004.7 automatically.
 
 **Implementation handoff (2026-09-30):** 004.4.1 and 004.5 are implemented and
 approved. The user also reviewed and approved the duplicate group streaming
@@ -11,6 +11,14 @@ and query/stream lifecycle notebooks on 2026-09-30. The
 [final API contract](004-public-api-target.md) and 004.6–004.8 plans remain
 prepared for the accepted direction. No subsequent plan is active. Do not begin
 004.6a automatically.
+
+**Readiness review (2026-09-30):** [004.6](004.6-existing-read-api-migration.md)
+is ready to begin with 004.6a on an implementation request. Its four children
+retain sequential gates. Plans now account for the completed duplicate-stream
+lifecycle, pinned detail reads, assertion-preserving migration, regex cleanup,
+and deferred public-tutorial corrections that do not block migration. Baseline validation:
+186 tests passed, 3 skipped; Ruff lint/format and mypy passed. This review
+updates planning only and does not activate or implement a child.
 
 004.4 introduced grouped queries conservatively; actual use later revealed
 why groups need sorting and explicit streaming; 004.4.1 evolves that abstraction
@@ -52,10 +60,10 @@ subplans; this does not retroactively rewrite earlier implementation outcomes.
 | 004.4 | [Grouped Queries and Duplicates](004.4-grouped-queries-and-duplicates.md) | Implemented (approved) | 004 | Bounded current duplicate groups with complete summaries and member expansion; retire the Phase 1 duplicate query facade. |
 | 004.4.1 | [Duplicate Group Sorting and Streaming](004.4.1-duplicate-group-sorting-and-streaming.md) | Implemented (approved) | 004.4 | Typed sorting and explicit bounded/unbounded group and member streams for later duplicate-handling workflows. |
 | 004.5 | [Tag and Content Predicates](004.5-tag-and-content-predicates.md) | Implemented (approved) | 004 | Shared predicates and distinct-content reduction. |
-| 004.6 | [Existing Read API Migration](004.6-existing-read-api-migration.md) | Prepared umbrella | 004 | Four sequential migration increments. |
-| 004.6a | [File Details and Migration](004.6a-file-details-and-migration.md) | Prepared | 004.6 | Typed tag views and direct files CLI queries. |
-| 004.6b | [Content Queries and Details](004.6b-content-queries-and-details.md) | Prepared | 004.6 | Catalog-wide content with root-scoped path previews. |
-| 004.6c | [Tag Vocabulary Queries](004.6c-tag-vocabulary-queries.md) | Prepared | 004.6 | Active vocabulary, usage counts and regex. |
-| 004.6d | [Retained Read Compilation](004.6d-retained-read-compilation.md) | Prepared | 004.6 | Shared internal execution for exact/history reads. |
+| 004.6 | [Existing Read API Migration](004.6-existing-read-api-migration.md) | Implemented | 004 | Four sequential migration increments. |
+| 004.6a | [File Details and Migration](004.6a-file-details-and-migration.md) | Implemented | 004.6 | Typed tag views and direct files CLI queries. |
+| 004.6b | [Content Queries and Details](004.6b-content-queries-and-details.md) | Implemented | 004.6 | Catalog-wide content with root-scoped path previews. |
+| 004.6c | [Tag Vocabulary Queries](004.6c-tag-vocabulary-queries.md) | Implemented | 004.6 | Active vocabulary, usage counts and regex. |
+| 004.6d | [Retained Read Compilation](004.6d-retained-read-compilation.md) | Implemented | 004.6 | Shared internal execution for exact/history reads. |
 | 004.7 | [Public API Review and Cleanup](004.7-public-api-review-and-cleanup.md) | Prepared | 004 | Export, documentation and consumer audit. |
 | 004.8 | [CLI Consistency Audit](004.8-cli-consistency-audit.md) | Prepared | 004 | End-to-end CLI contract and umbrella completion audit. |

@@ -93,7 +93,7 @@ def test_catalog_scan_excludes_control_directory_and_preserves_source(
     assert "Total size observed: 14 B" in output
     assert source.read_bytes() == b"source content"
     with Catalog.open(root / ".archiver" / "catalog.sqlite") as catalog:
-        assert [item.relative_path.as_posix() for item in catalog.current_files(root)] == ["nested/entry.txt"]
+        assert [item.relative_path.as_posix() for item in catalog.files(root).stream_all()] == ["nested/entry.txt"]
 
 
 def test_catalog_duplicates_reports_aggregate_metrics(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -150,7 +150,9 @@ def test_failed_cli_scan_preserves_current_state(
 
     assert "reconciliation failed" in capsys.readouterr().err
     with Catalog.open(root / ".archiver" / "catalog.sqlite") as catalog:
-        assert catalog.current_files(root)[0].content_id == expected_content
+        current = catalog.files(root).first()
+        assert current is not None
+        assert current.content_id == expected_content
 
 
 def test_catalog_refresh_dry_run_is_write_free_and_renders_deterministic_details(
@@ -193,9 +195,9 @@ def test_catalog_refresh_applies_and_scan_remains_an_equivalent_alias(
     assert "Refresh completed" in refresh_output
     assert "Refresh completed" in scan_output
     with Catalog.open(refresh_root / ".archiver" / "catalog.sqlite") as refresh_catalog:
-        refresh_files = refresh_catalog.current_files(refresh_root)
+        refresh_files = list(refresh_catalog.files(refresh_root).stream_all())
     with Catalog.open(scan_root / ".archiver" / "catalog.sqlite") as scan_catalog:
-        scan_files = scan_catalog.current_files(scan_root)
+        scan_files = list(scan_catalog.files(scan_root).stream_all())
     assert [(item.relative_path, item.content_id) for item in refresh_files] == [
         (item.relative_path, item.content_id) for item in scan_files
     ]

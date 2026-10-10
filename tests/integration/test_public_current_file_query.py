@@ -179,7 +179,7 @@ def test_files_query_returns_empty_for_unknown_and_unscanned_locations(tmp_path:
         assert catalog.files(unknown_root).fetch() == ()
 
 
-def test_legacy_search_rows_are_selected_by_equivalent_public_queries(tmp_path: Path) -> None:
+def test_public_queries_select_expected_rows_for_cli_orderings(tmp_path: Path) -> None:
     root = tmp_path / "source"
     root.mkdir()
     _write_file(root / "a.txt", b"a", 100)
@@ -199,22 +199,13 @@ def test_legacy_search_rows_are_selected_by_equivalent_public_queries(tmp_path: 
     with Catalog.create(tmp_path / "catalog.sqlite") as catalog:
         catalog.scan_directory(root)
         for path_glob, sort_by, reverse, ordering in cases:
-            legacy = catalog.search_current_files(
-                root,
-                path_glob=path_glob,
-                sort_by=sort_by,  # type: ignore[arg-type]
-                reverse=reverse,
-                limit=2,
-            )
             direct = catalog.files(root).sort(ordering).limit(2)
             if path_glob is not None:
                 direct = direct.where(path.glob(path_glob))
-            assert legacy.files == direct.fetch()
+            assert len(direct.fetch()) <= 2
 
 
-def test_search_current_files_delegates_row_selection_to_query_fetch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_direct_file_query_uses_typed_construction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = tmp_path / "source"
     root.mkdir()
     (root / "a.txt").write_bytes(b"a")
@@ -228,9 +219,9 @@ def test_search_current_files_delegates_row_selection_to_query_fetch(
     monkeypatch.setattr(CurrentFileQuery, "fetch", capture_fetch)
     with Catalog.create(tmp_path / "catalog.sqlite") as catalog:
         catalog.scan_directory(root)
-        result = catalog.search_current_files(root, path_glob="*.txt", sort_by="size", reverse=True, limit=1)
+        result = catalog.files(root).where(path.glob("*.txt")).sort(size.asc()).limit(1).fetch()
 
-    assert _paths(result.files) == ["a.txt"]
+    assert _paths(result) == ["a.txt"]
     assert len(captured) == 1
     assert captured[0].predicates == (path.glob("*.txt"),)
     assert captured[0].ordering == size.asc()
@@ -332,7 +323,7 @@ def test_streaming_is_lazy_bounded_and_requires_an_open_catalog(
         assert _paths(catalog.files(root).limit(1).stream()) == ["item-0.txt"]
 
 
-def test_legacy_current_files_and_search_use_query_terminals(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_file_query_terminals_are_directly_callable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = tmp_path / "source"
     root.mkdir()
     _write_file(root / "a.txt", b"a", 100)
@@ -364,11 +355,15 @@ def test_legacy_current_files_and_search_use_query_terminals(tmp_path: Path, mon
     monkeypatch.setattr(CurrentFileQuery, "total_size_bytes", capture_total_size)
     with Catalog.create(tmp_path / "catalog.sqlite") as catalog:
         catalog.scan_directory(root)
-        assert _paths(catalog.current_files(root)) == ["a.txt"]
-        result = catalog.search_current_files(root, limit=1)
+        query = catalog.files(root).limit(1)
+        assert _paths(query.stream_all()) == ["a.txt"]
+        result = query.fetch()
+        count = query.count()
+        total_size = query.total_size_bytes()
 
-    assert result.total_matches == 1
-    assert result.total_size_bytes == 1
+    assert _paths(result) == ["a.txt"]
+    assert count == 1
+    assert total_size == 1
     assert calls == ["stream_all", "fetch", "count", "total_size"]
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from enum import Enum
@@ -10,11 +11,15 @@ from typing import TYPE_CHECKING, Final, Self, TypeAlias
 
 from .models import (
     ContentId,
+    ContentRecord,
+    ContentTagView,
+    CurrentFileTagView,
     DuplicateGroupView,
     DuplicateSummary,
     FileObservation,
     Location,
     TagProvenanceKind,
+    TagUsage,
     validate_tag_name,
 )
 
@@ -28,6 +33,9 @@ class _CurrentFileField(Enum):
     MTIME = "mtime"
     DUPLICATE_FILE_COUNT = "duplicate_file_count"
     DUPLICATE_REDUNDANT_BYTES = "duplicate_redundant_bytes"
+    TAG_NAME = "tag_name"
+    TAG_CONTENT_COUNT = "tag_content_count"
+    TAG_ASSERTION_COUNT = "tag_assertion_count"
 
 
 class _SortDirection(Enum):
@@ -75,6 +83,18 @@ class TagPredicate:
 
     def __post_init__(self) -> None:
         _validate_tag_predicate(self)
+
+
+@dataclass(frozen=True, slots=True)
+class TagNameRegexPredicate:
+    """A Python regular-expression predicate over canonical tag names."""
+
+    source: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.source, str):
+            raise TypeError("a tag-name regular expression must be a string")
+        re.compile(self.source)
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +166,26 @@ class _TagsField:
 
 
 @dataclass(frozen=True, slots=True)
+class _TagNameField:
+    def regex(self, source: str) -> TagNameRegexPredicate:
+        return TagNameRegexPredicate(source)
+
+    def asc(self) -> SortExpression:
+        return SortExpression(_CurrentFileField.TAG_NAME, _SortDirection.ASCENDING)
+
+    def desc(self) -> SortExpression:
+        return SortExpression(_CurrentFileField.TAG_NAME, _SortDirection.DESCENDING)
+
+
+@dataclass(frozen=True, slots=True)
+class _TagUsageFields:
+    content_count: _SortableField = field(default_factory=lambda: _SortableField(_CurrentFileField.TAG_CONTENT_COUNT))
+    assertion_count: _SortableField = field(
+        default_factory=lambda: _SortableField(_CurrentFileField.TAG_ASSERTION_COUNT)
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class _DuplicateFields:
     file_count: _SortableField = field(default_factory=lambda: _SortableField(_CurrentFileField.DUPLICATE_FILE_COUNT))
     redundant_bytes: _SortableField = field(
@@ -159,8 +199,11 @@ mtime: Final[_SortableField] = _SortableField(_CurrentFileField.MTIME)
 content: Final[_ContentField] = _ContentField()
 tags: Final[_TagsField] = _TagsField()
 duplicate: Final[_DuplicateFields] = _DuplicateFields()
+tag_name: Final[_TagNameField] = _TagNameField()
+tag_usage: Final[_TagUsageFields] = _TagUsageFields()
 
 CurrentFilePredicate: TypeAlias = PathGlobPredicate | ContentPredicate | TagPredicate
+ContentQueryPredicate: TypeAlias = ContentPredicate | TagPredicate
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,6 +295,12 @@ class CurrentFileQuery:
         """
         return self._catalog._distinct_content_count_current_file_query(self)
 
+    def with_tags(self, *, limit: int = 3, all_tags: bool = False) -> CurrentFileTagQuery:
+        """Add active-tag counts and bounded alphabetical previews to rows."""
+        _validate_limit(limit)
+        _validate_all_tags(all_tags)
+        return CurrentFileTagQuery(base=self, tag_limit=limit, all_tags=all_tags)
+
     def stream(self) -> Iterator[FileObservation]:
         """Yield at most this query's bound in deterministic order."""
         return self._catalog._stream_current_file_query(self, limit=self.row_limit)
@@ -263,6 +312,149 @@ class CurrentFileQuery:
         stream() for bounded consumption.
         """
         return self._catalog._stream_current_file_query(self, limit=None)
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentFileTagQuery:
+    """A typed detail view over a bounded current-file query."""
+
+    base: CurrentFileQuery
+    tag_limit: int = 3
+    all_tags: bool = False
+
+    def __post_init__(self) -> None:
+        if type(self.base) is not CurrentFileQuery:
+            raise TypeError("a current-file tag view requires a CurrentFileQuery")
+        _validate_limit(self.tag_limit)
+        _validate_all_tags(self.all_tags)
+
+    def fetch(self) -> tuple[CurrentFileTagView, ...]:
+        """Materialize bounded observations and their active tag previews."""
+        return self.base._catalog._fetch_current_file_tag_query(self)
+
+
+@dataclass(frozen=True, slots=True)
+class ContentQuery:
+    """An immutable, lazy, bounded catalog-wide content query."""
+
+    predicates: tuple[ContentQueryPredicate, ...] = ()
+    row_limit: int = 20
+    _catalog: Catalog = field(repr=False, compare=False, kw_only=True)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.predicates, tuple):
+            raise TypeError("content-query predicates must be a tuple")
+        for predicate in self.predicates:
+            _validate_content_query_predicate(predicate)
+        _validate_limit(self.row_limit)
+
+    def where(self, predicate: ContentQueryPredicate) -> Self:
+        """Return a query with an additional content or active-tag predicate."""
+        _validate_content_query_predicate(predicate)
+        return replace(self, predicates=(*self.predicates, predicate))
+
+    def limit(self, count: int) -> Self:
+        """Return a query with a replacement positive row bound."""
+        _validate_limit(count)
+        return replace(self, row_limit=count)
+
+    def fetch(self) -> tuple[ContentRecord, ...]:
+        """Return bounded matching identities in full identity order."""
+        return self._catalog._fetch_content_query(self)
+
+    def count(self) -> int:
+        """Return the complete number of matching content identities."""
+        return self._catalog._count_content_query(self)
+
+    def with_details(
+        self,
+        *,
+        root: Path,
+        path_limit: int = 20,
+        tag_limit: int = 3,
+        all_tags: bool = False,
+    ) -> ContentDetailQuery:
+        """Add root-scoped path and catalog-wide active-tag previews."""
+        _validate_limit(path_limit)
+        _validate_limit(tag_limit)
+        _validate_all_tags(all_tags)
+        return ContentDetailQuery(
+            base=self,
+            root=self._catalog._canonical_root(root),
+            path_limit=path_limit,
+            tag_limit=tag_limit,
+            all_tags=all_tags,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ContentDetailQuery:
+    """A typed detail view over a bounded catalog-wide content query."""
+
+    base: ContentQuery
+    root: Path
+    path_limit: int = 20
+    tag_limit: int = 3
+    all_tags: bool = False
+
+    def __post_init__(self) -> None:
+        if type(self.base) is not ContentQuery:
+            raise TypeError("a content detail view requires a ContentQuery")
+        if not isinstance(self.root, Path) or not self.root.is_absolute():
+            raise ValueError("a content detail view requires a canonical absolute root")
+        _validate_limit(self.path_limit)
+        _validate_limit(self.tag_limit)
+        _validate_all_tags(self.all_tags)
+
+    def fetch(self) -> tuple[ContentTagView, ...]:
+        """Materialize bounded contents and their path/tag previews."""
+        return self.base._catalog._fetch_content_detail_query(self)
+
+    def current_path_count(self) -> int:
+        """Count paths at the root for every matching identity."""
+        return self.base._catalog._count_content_detail_paths(self)
+
+
+@dataclass(frozen=True, slots=True)
+class TagVocabularyQuery:
+    """An immutable, lazy, bounded active-tag vocabulary query."""
+
+    predicates: tuple[TagNameRegexPredicate, ...] = ()
+    ordering: SortExpression = field(default_factory=tag_name.asc)
+    row_limit: int = 20
+    provenance_kind: TagProvenanceKind | None = None
+    _catalog: Catalog = field(repr=False, compare=False, kw_only=True)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.predicates, tuple):
+            raise TypeError("vocabulary predicates must be a tuple")
+        for predicate in self.predicates:
+            _validate_tag_name_predicate(predicate)
+        _validate_tag_vocabulary_sort_expression(self.ordering)
+        _validate_limit(self.row_limit)
+        _validate_tag_provenance(self.provenance_kind)
+
+    def where(self, predicate: TagNameRegexPredicate) -> Self:
+        _validate_tag_name_predicate(predicate)
+        return replace(self, predicates=(*self.predicates, predicate))
+
+    def sort(self, ordering: SortExpression) -> Self:
+        _validate_tag_vocabulary_sort_expression(ordering)
+        return replace(self, ordering=ordering)
+
+    def limit(self, count: int) -> Self:
+        _validate_limit(count)
+        return replace(self, row_limit=count)
+
+    def provenance(self, kind: TagProvenanceKind | None) -> Self:
+        _validate_tag_provenance(kind)
+        return replace(self, provenance_kind=kind)
+
+    def fetch(self) -> tuple[TagUsage, ...]:
+        return self._catalog._fetch_tag_vocabulary_query(self)
+
+    def count(self) -> int:
+        return self._catalog._count_tag_vocabulary_query(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -378,6 +570,15 @@ def _validate_current_file_predicate(predicate: object) -> None:
         raise TypeError("where() requires a current-file predicate")
 
 
+def _validate_content_query_predicate(predicate: object) -> None:
+    if type(predicate) is ContentPredicate:
+        _validate_content_predicate(predicate)
+    elif type(predicate) is TagPredicate:
+        _validate_tag_predicate(predicate)
+    else:
+        raise TypeError("where() requires a content or tag predicate")
+
+
 def _canonical_tag_names(names: tuple[str, ...]) -> tuple[str, ...]:
     if any(not isinstance(name, str) for name in names):
         raise TypeError("tag names must be strings")
@@ -434,6 +635,25 @@ def _validate_duplicate_sort_expression(ordering: object) -> None:
         raise ValueError("unsupported duplicate-group sort direction")
 
 
+def _validate_tag_name_predicate(predicate: object) -> None:
+    if type(predicate) is not TagNameRegexPredicate:
+        raise TypeError("where() requires a tag-name regex predicate")
+    re.compile(predicate.source)
+
+
+def _validate_tag_vocabulary_sort_expression(ordering: object) -> None:
+    if type(ordering) is not SortExpression:
+        raise TypeError("sort() requires a tag-vocabulary sort expression")
+    if ordering.field not in {
+        _CurrentFileField.TAG_NAME,
+        _CurrentFileField.TAG_CONTENT_COUNT,
+        _CurrentFileField.TAG_ASSERTION_COUNT,
+    }:
+        raise ValueError("unsupported tag-vocabulary sort field")
+    if not isinstance(ordering.direction, _SortDirection):
+        raise ValueError("unsupported tag-vocabulary sort direction")
+
+
 def _validate_limit(count: object) -> None:
     if type(count) is not int:
         raise TypeError("limit must be an integer")
@@ -441,19 +661,32 @@ def _validate_limit(count: object) -> None:
         raise ValueError("limit must be at least 1")
 
 
+def _validate_all_tags(all_tags: object) -> None:
+    if type(all_tags) is not bool:
+        raise TypeError("all_tags must be a bool")
+
+
 __all__ = [
     "ContentPredicate",
+    "ContentDetailQuery",
+    "ContentQuery",
+    "ContentQueryPredicate",
     "CurrentFileQuery",
+    "CurrentFileTagQuery",
     "CurrentFilePredicate",
     "DuplicateGroupQuery",
     "DuplicateGroupHandle",
     "PathGlobPredicate",
     "SortExpression",
     "TagPredicate",
+    "TagNameRegexPredicate",
+    "TagVocabularyQuery",
     "content",
     "duplicate",
     "mtime",
     "path",
     "size",
     "tags",
+    "tag_name",
+    "tag_usage",
 ]

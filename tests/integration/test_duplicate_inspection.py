@@ -199,7 +199,9 @@ def test_duplicate_fetch_pins_one_scan_for_groups_and_members(tmp_path: Path, mo
         catalog.scan_directory(root)
         old_scan = catalog.current_scan(root)
         assert old_scan is not None
-        old_content = catalog.current_files(root)[0].content_id
+        old_row = catalog.files(root).first()
+        assert old_row is not None
+        old_content = old_row.content_id
 
         first.write_bytes(b"new")
         second.write_bytes(b"new")
@@ -208,7 +210,9 @@ def test_duplicate_fetch_pins_one_scan_for_groups_and_members(tmp_path: Path, mo
         assert new_scan is not None
         assert new_scan.id != old_scan.id
 
-        location = catalog.current_files(root)[0].location
+        current_row = catalog.files(root).first()
+        assert current_row is not None
+        location = current_row.location
         assert location.id is not None
         catalog._connection.execute(
             "UPDATE locations SET current_scan_id = ? WHERE id = ?",
@@ -240,17 +244,12 @@ def test_duplicate_fetch_pins_one_scan_for_groups_and_members(tmp_path: Path, mo
         assert catalog.current_scan(root) == new_scan
 
 
-def test_bounded_duplicate_fetch_does_not_use_legacy_observation_materialization(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_bounded_duplicate_fetch_does_not_use_legacy_observation_materialization(tmp_path: Path) -> None:
     root = tmp_path / "source"
     root.mkdir()
     _write_group(root, "many", tuple(f"copy-{index}.bin" for index in range(5)), b"same")
 
-    def fail_legacy_materialization(*_: object, **__: object) -> object:
-        raise AssertionError("bounded duplicate fetch must use the grouped executor")
-
-    monkeypatch.setattr(Catalog, "_observations_for_query", fail_legacy_materialization)
+    assert not hasattr(Catalog, "_observations_for_query")
     with Catalog.create(tmp_path / "catalog.sqlite") as catalog:
         catalog.scan_directory(root)
         groups = catalog.duplicates(root).limit(1).member_limit(2).fetch()

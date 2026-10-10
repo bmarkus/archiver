@@ -6,11 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Literal, TypeAlias
 
-CurrentFileSort: TypeAlias = Literal["path", "size", "date"]
-AvailableTagSort: TypeAlias = Literal["name", "content", "assertions"]
 RefreshChangeKind: TypeAlias = Literal["new", "unchanged", "modified", "missing"]
 TagProvenanceKind: TypeAlias = Literal["user", "system"]
-TagMatchMode: TypeAlias = Literal["all", "any"]
 
 _TAG_NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9._:-]{0,63}\Z")
 
@@ -36,6 +33,14 @@ class ContentId:
             raise ValueError("a SHA-256 digest must contain exactly 64 hexadecimal characters")
         if self.digest != self.digest.lower():
             raise ValueError("content digests must use lowercase hexadecimal")
+
+
+@dataclass(frozen=True, slots=True)
+class ContentRecord:
+    """One persisted content identity and its byte size."""
+
+    content_id: ContentId
+    size_bytes: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,31 +84,6 @@ class TagUsage:
 
 
 @dataclass(frozen=True, slots=True)
-class AvailableTagSearch:
-    """Bounded active tag usage rows with the complete matching count."""
-
-    tags: tuple[TagUsage, ...]
-    total_matches: int
-
-
-@dataclass(frozen=True, slots=True)
-class TaggedContent:
-    """One content identity returned by a reverse tag lookup."""
-
-    content_id: ContentId
-    size_bytes: int
-    assertions: tuple[ContentTagAssertion, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class TaggedContentSearch:
-    """Bounded tagged content together with its complete match count."""
-
-    contents: tuple[TaggedContent, ...]
-    total_matches: int
-
-
-@dataclass(frozen=True, slots=True)
 class ContentTagView:
     """One content identity with bounded current paths and active tag names."""
 
@@ -113,15 +93,6 @@ class ContentTagView:
     current_paths: tuple[PurePosixPath, ...]
     active_tag_count: int
     tags: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class MultiTagContentSearch:
-    """Bounded multi-tag content rows with complete content and path totals."""
-
-    contents: tuple[ContentTagView, ...]
-    total_matches: int
-    total_current_paths: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,16 +121,6 @@ class CurrentFileTagView:
     observation: FileObservation
     active_tag_count: int
     tags: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class TagAwareCurrentFileSearch:
-    """Bounded tag-aware current files with complete file/content totals."""
-
-    files: tuple[CurrentFileTagView, ...]
-    total_file_count: int
-    total_content_count: int
-    total_file_size_bytes: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,15 +168,6 @@ class RefreshChangeSet:
             modified_files=counts["modified"],
             missing_files=counts["missing"],
         )
-
-
-@dataclass(frozen=True, slots=True)
-class CurrentFileSearch:
-    """A bounded current-file query with its total number of matches."""
-
-    files: tuple[FileObservation, ...]
-    total_matches: int
-    total_size_bytes: int
 
 
 @dataclass(frozen=True, slots=True)

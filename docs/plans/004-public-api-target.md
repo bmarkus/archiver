@@ -6,8 +6,9 @@ of features already implemented. The domain model and invariants remain authorit
 
 Amended 2026-09-29 by [004.4.1](004.4.1-duplicate-group-sorting-and-streaming.md):
 typed duplicate sorting and explicit bounded/unbounded group and member streams
-are accepted additions, not yet implemented. Its detailed lifetime and bounds
-contract governs those additions.
+are implemented and approved as of 2026-09-30. Its detailed lifetime and bounds
+contract governs those additions. Readiness review on 2026-09-30 clarified the
+004.6 migration notes; its children remain prepared and unimplemented.
 
 ## Decisions and boundaries
 
@@ -100,8 +101,9 @@ CurrentFileQuery.with_tags(*, limit=3, all_tags=False) -> CurrentFileTagQuery.
 ContentQuery.with_details(*, root, path_limit=20, tag_limit=3, all_tags=False)
 -> ContentDetailQuery.
 
-Views hold the immutable base query and display options; only fetch() is a
-terminal on these view types. Set row filtering/order/bounds before creating
+Views hold the immutable base query and display options. Both expose fetch();
+ContentDetailQuery additionally exposes current_path_count() as specified below.
+Set row filtering/order/bounds before creating
 the view. To change them, derive another base query and create another view;
 do not duplicate the whole transformation/terminal vocabulary on views.
 
@@ -126,11 +128,15 @@ do not duplicate the whole transformation/terminal vocabulary on views.
   active-tag counts/previews and FileObservation materialization.
 - Pin root observation scan within each fetch. Do not promise atomic tag
   snapshots across statements or expose a new transaction/snapshot API.
+  Separate totals and fetch calls, including those in one CLI command, remain
+  separate terminals. Pinned scans preserve catalog observations, not live
+  filesystem bytes. Preserve 004.4.1 stream/handle lifetimes during extraction.
 
 ## Catalog classification and migration owner
 
-Replaced means the old entry point disappears after callers use the specified
-replacement. No deprecation shim or compatibility period is required for these
+Replaced means the old entry point disappears after runtime callers and tests
+use the specified replacement. Old notebooks do not block removal.
+No deprecation shim or compatibility period is required for these
 pre-1.0 changes. Preserve capabilities and errors unless this contract explicitly
 changes a result shape or validation rule.
 
@@ -169,6 +175,9 @@ AvailableTagSearch (004.6c). DuplicateGroupSearch and duplicate_groups_frame
 were removed in 004.4. Retire CurrentFileSort, AvailableTagSort, TagMatchMode
 when no public signature needs them; CLI may use local parsing types rather
 than retain obsolete public aliases. Keep TagProvenanceKind and mutation types.
+Removal ownership is CurrentFileSort in 004.6a, TagMatchMode in 004.6b, and
+AvailableTagSort in 004.6c. Define ContentRecord in archiver.models and re-export
+it from archiver alongside the other domain records.
 
 ## Consumer migration and history policy
 
@@ -177,13 +186,16 @@ Preserve arguments, defaults, output, totals, wrapping, error timing, and exit
 codes, while moving query construction to the public grammar. Renderer helpers
 receive typed rows and totals rather than recreated search-envelope objects.
 
-Search all tracked source, tests, examples, and public notebooks for removed
-APIs. Preserve behavioral tests by migrating them, not deleting their semantic
-coverage. Update executable public tutorials to current APIs, or clearly mark
-a tutorial historical with the frozen Phase 1 branch requirement and prevent
-presenting it as runnable on current main. Prefer updating ordinary tutorials.
+Search tracked runtime source and tests for removed APIs. Preserve behavioral
+tests by migrating them, not deleting their semantic coverage. Per user
+clarification on 2026-09-30, old notebooks can be corrected later: their
+compatibility and execution are not gates for API migration. Record deferred
+corrections; retain no compatibility shims solely for notebook consumers.
 Do not edit private notebooks, personal data, or historical implementation
 records merely to remove textual mentions.
+
+The 2026-09-30 inventory found retired duplicate calls in older tutorials.
+These are documentation debt, not an implementation-readiness blocker.
 
 ## Shared completion gate
 

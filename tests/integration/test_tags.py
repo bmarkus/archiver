@@ -6,6 +6,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 
 from archiver import Catalog, ContentId, InvalidCatalogError, TaggingError, TagProvenance
+from archiver.query import tags
 
 
 def _downgrade_to_v1(database_path: Path) -> None:
@@ -27,7 +28,7 @@ def test_explicit_v1_migration_preserves_catalog_identity_and_current_state(tmp_
     with Catalog.create(database_path) as catalog:
         catalog.scan_directory(root)
         catalog_uuid = catalog.catalog_uuid
-        expected = catalog.current_files(root)
+        expected = list(catalog.files(root).stream_all())
     _downgrade_to_v1(database_path)
 
     with pytest.raises(InvalidCatalogError, match="requires migration"):
@@ -38,7 +39,7 @@ def test_explicit_v1_migration_preserves_catalog_identity_and_current_state(tmp_
     with Catalog.open(database_path) as catalog:
         assert catalog.schema_version == 2
         assert catalog.catalog_uuid == catalog_uuid
-        assert catalog.current_files(root) == expected
+        assert list(catalog.files(root).stream_all()) == expected
 
 
 def test_failed_migration_rolls_back_version_and_partial_schema(tmp_path: Path) -> None:
@@ -109,7 +110,7 @@ def test_tags_survive_refresh_and_every_path_disappearing(tmp_path: Path) -> Non
 
         renamed.unlink()
         catalog.scan_directory(root)
-        assert catalog.current_files(root) == []
+        assert list(catalog.files(root).stream_all()) == []
         assert [item.tag for item in catalog.tags_for_content(content_id)] == ["remember"]
         assert catalog.add_content_tag(content_id, "orphaned", provenance) is True
         assert [item.tag for item in catalog.tags_for_content(content_id)] == ["orphaned", "remember"]
@@ -173,15 +174,24 @@ def test_reverse_tag_lookup_is_bounded_deterministic_and_filterable(tmp_path: Pa
             catalog.add_content_tag(content_id, "selected", user)
         catalog.add_content_tag(content_ids[1], "selected", system)
 
-        result = catalog.search_tagged_content("selected", limit=2)
-        system_result = catalog.search_tagged_content("selected", provenance="system", limit=20)
+        result = catalog.contents().where(tags.all_of("selected")).limit(2)
+        system_result = catalog.contents().where(tags.all_of("selected", provenance="system")).limit(20)
+        result_rows = result.fetch()
+        system_rows = system_result.fetch()
+        result_count = result.count()
+        system_count = system_result.count()
+        system_assertions = tuple(
+            assertion
+            for assertion in catalog.tags_for_content(system_rows[0].content_id)
+            if assertion.tag == "selected" and assertion.provenance.kind == "system"
+        )
 
-    assert result.total_matches == 3
-    assert len(result.contents) == 2
-    assert [item.content_id.digest for item in result.contents] == sorted(item.digest for item in content_ids)[:2]
-    assert system_result.total_matches == 1
-    assert system_result.contents[0].content_id == content_ids[1]
-    assert {assertion.provenance.kind for assertion in system_result.contents[0].assertions} == {"system"}
+    assert result_count == 3
+    assert len(result_rows) == 2
+    assert [item.content_id.digest for item in result_rows] == sorted(item.digest for item in content_ids)[:2]
+    assert system_count == 1
+    assert system_rows[0].content_id == content_ids[1]
+    assert {assertion.provenance.kind for assertion in system_assertions} == {"system"}
 
 
 def test_tag_operations_reject_unknown_content_invalid_names_and_unsafe_paths(tmp_path: Path) -> None:
@@ -201,7 +211,7 @@ def test_tag_operations_reject_unknown_content_invalid_names_and_unsafe_paths(tm
         with pytest.raises(TaggingError, match="no current path"):
             catalog.tags_for_path(root, PurePosixPath("missing"))
         with pytest.raises(ValueError, match="limit"):
-            catalog.search_tagged_content("valid", limit=0)
+            catalog.contents().where(tags.all_of("valid")).limit(0)
 
 
 @pytest.mark.parametrize(

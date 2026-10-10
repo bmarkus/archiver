@@ -40,7 +40,7 @@ def test_current_files_uses_query_path_with_deterministically_ordered_domain_res
 
     with Catalog.create(database_path) as catalog:
         catalog.scan_directory(root)
-        current = catalog.current_files(root)
+        current = list(catalog.files(root).stream_all())
 
         assert [item.relative_path.as_posix() for item in current] == [
             "empty",
@@ -53,7 +53,7 @@ def test_current_files_uses_query_path_with_deterministically_ordered_domain_res
         assert _source_snapshot(paths_in_order) == source_before
 
     with Catalog.open(database_path) as reopened:
-        assert reopened.current_files(root) == current
+        assert list(reopened.files(root).stream_all()) == current
 
 
 def test_current_files_returns_empty_for_unknown_and_not_yet_scanned_locations(tmp_path: Path) -> None:
@@ -70,8 +70,8 @@ def test_current_files_returns_empty_for_unknown_and_not_yet_scanned_locations(t
     connection.close()
 
     with Catalog.open(database_path) as catalog:
-        assert catalog.current_files(known_root) == []
-        assert catalog.current_files(unknown_root) == []
+        assert list(catalog.files(known_root).stream_all()) == []
+        assert list(catalog.files(unknown_root).stream_all()) == []
 
 
 def test_current_files_execution_failure_is_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -83,7 +83,7 @@ def test_current_files_execution_failure_is_read_only(tmp_path: Path, monkeypatc
 
     with Catalog.create(tmp_path / "catalog.sqlite") as catalog:
         catalog.scan_directory(root)
-        expected_current = catalog.current_files(root)
+        expected_current = list(catalog.files(root).stream_all())
         expected_history = list(catalog.observation_history())
         expected_scan = catalog.current_scan(root)
         expected_schema = catalog.schema_version
@@ -96,11 +96,11 @@ def test_current_files_execution_failure_is_read_only(tmp_path: Path, monkeypatc
         with monkeypatch.context() as patch:
             patch.setattr("archiver._sqlite_query.compile_current_observations", compile_invalid_query)
             with pytest.raises(sqlite3.OperationalError, match="no such table"):
-                catalog.current_files(root)
+                list(catalog.files(root).stream_all())
 
         assert len(captured) == 1
         assert captured[0].location.root == root.resolve()
-        assert catalog.current_files(root) == expected_current
+        assert list(catalog.files(root).stream_all()) == expected_current
         assert list(catalog.observation_history()) == expected_history
         assert catalog.current_scan(root) == expected_scan
         assert catalog.schema_version == expected_schema

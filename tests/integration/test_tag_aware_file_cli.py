@@ -154,20 +154,15 @@ def test_catalog_files_tag_display_handles_overflow_all_tags_empty_and_narrow_wi
     assert "Required tags: absent" in empty_output
 
 
-def test_catalog_files_without_tag_options_uses_legacy_path_exactly(
+def test_catalog_files_without_tag_options_uses_untagged_renderer(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = tmp_path / "root"
     root.mkdir()
     (root / "entry.bin").write_bytes(b"entry")
     _initialize_and_scan(root, capsys)
 
-    def unexpected_tag_query(*args: object, **kwargs: object) -> object:
-        raise AssertionError("legacy command dispatched through tag-aware query")
-
-    monkeypatch.setattr(Catalog, "search_current_files_with_tags", unexpected_tag_query)
     assert main(["catalog", "files", str(root), "--sort", "size", "--reverse"]) == 0
     output = capsys.readouterr().out
 

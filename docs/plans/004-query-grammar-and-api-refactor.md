@@ -9,10 +9,13 @@
 ## Goal
 
 Direction amended 2026-09-29: [004.4.1](004.4.1-duplicate-group-sorting-and-streaming.md)
-is active after completion of 004.5. It extends duplicate groups with typed
+followed completion of 004.5 and is implemented and approved as of 2026-09-30.
+It extends duplicate groups with typed
 sorting and explicit bounded/unbounded streaming of groups and members to
 support future duplicate-handling workflows. Mutation workflows remain outside
-this query refactor; implementation of the extension has not started.
+this query refactor. Plan 004.6 and its four sequential children were
+implemented on 2026-09-30; no subplan is currently active and 004.7 has not
+started.
 
 Implementation direction amended 2026-09-09 at the user's request. The
 [final public API contract](004-public-api-target.md) and prepared 004.5–004.8

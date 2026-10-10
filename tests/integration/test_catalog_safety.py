@@ -26,7 +26,7 @@ def test_directory_symlinks_are_not_traversed(tmp_path: Path) -> None:
     with Catalog.create(tmp_path / "catalog.sqlite") as catalog:
         catalog.scan_directory(root)
 
-        assert [item.relative_path.as_posix() for item in catalog.current_files(root)] == ["inside/visible.txt"]
+        assert [item.relative_path.as_posix() for item in catalog.files(root).stream_all()] == ["inside/visible.txt"]
     assert inside_file.read_bytes() == b"inside"
 
 
@@ -45,7 +45,7 @@ def test_locations_with_one_shared_content_instance_remain_isolated(tmp_path: Pa
         catalog.scan_directory(second_root)
         first_scan = catalog.current_scan(first_root)
         second_scan = catalog.current_scan(second_root)
-        second_current = catalog.current_files(second_root)
+        second_current = list(catalog.files(second_root).stream_all())
 
         assert first_scan is not None and second_scan is not None
         assert first_scan.id != second_scan.id
@@ -57,7 +57,7 @@ def test_locations_with_one_shared_content_instance_remain_isolated(tmp_path: Pa
         first_file.write_bytes(b"changed")
         catalog.scan_directory(first_root)
 
-        assert catalog.current_files(second_root) == second_current
+        assert list(catalog.files(second_root).stream_all()) == second_current
         assert catalog.current_scan(second_root) == second_scan
         assert catalog.duplicates(second_root).fetch() == ()
 
@@ -110,7 +110,7 @@ def test_running_and_failed_history_rows_never_become_current_state(tmp_path: Pa
 
     with Catalog.create(database_path) as catalog:
         catalog.scan_directory(root)
-        expected_current = catalog.current_files(root)
+        expected_current = list(catalog.files(root).stream_all())
         expected_scan = catalog.current_scan(root)
         expected_summary = catalog.current_summary(root)
 
@@ -156,5 +156,5 @@ def test_running_and_failed_history_rows_never_become_current_state(tmp_path: Pa
         ]
         assert catalog.current_scan(root) == expected_scan
         assert catalog.current_summary(root) == expected_summary
-        assert catalog.current_files(root) == expected_current
+        assert list(catalog.files(root).stream_all()) == expected_current
         assert catalog.duplicates(root).fetch() == ()

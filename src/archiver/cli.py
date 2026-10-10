@@ -11,34 +11,35 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path, PurePosixPath
 from textwrap import wrap
-from typing import TextIO
+from typing import Literal, TextIO, TypeAlias
 
 from .catalog import SCHEMA_VERSION, Catalog
 from .errors import InvalidCatalogError, ScanFailure, TaggingError
 from .models import (
-    AvailableTagSearch,
-    AvailableTagSort,
     ContentId,
     ContentTagAssertion,
     ContentTagView,
-    CurrentFileSort,
     CurrentFileTagView,
     DuplicateGroupView,
     DuplicateSummary,
     FileObservation,
-    MultiTagContentSearch,
     RefreshChange,
     RefreshChangeSet,
     RefreshSummary,
     ScanProgress,
     ScanRun,
     ScanSummary,
-    TagMatchMode,
     TagProvenance,
     TagProvenanceKind,
     TagUsage,
     validate_tag_name,
 )
+from .query import SortExpression, mtime, path, size, tag_name, tag_usage
+from .query import tags as tags_field
+
+CliFileSort: TypeAlias = Literal["path", "size", "date"]
+CliTagSort: TypeAlias = Literal["name", "content", "assertions"]
+CliTagMatch: TypeAlias = Literal["all", "any"]
 
 _CONTROL_DIRECTORY_NAME = ".archiver"
 _DATABASE_FILE_NAME = "catalog.sqlite"
@@ -100,7 +101,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     limit=arguments.limit,
                     sort_by=arguments.sort_by,
                     reverse=arguments.reverse,
-                    tag_limit=None if arguments.all_tags else (arguments.display_tag_limit or 3),
+                    tag_limit=arguments.display_tag_limit or 3,
                     all_tags=arguments.all_tags,
                 )
             else:
@@ -283,40 +284,47 @@ def _handle_tags(arguments: argparse.Namespace) -> None:
     root, database_path = _catalog_paths(arguments.root)
     if arguments.tag_command == "available":
         with Catalog.open(database_path) as catalog:
-            available_result = catalog.search_available_tags(
-                name_regex=arguments.name_regex,
-                provenance=arguments.provenance,
-                sort_by=arguments.sort_by,
-                reverse=arguments.reverse,
-                limit=arguments.limit,
-            )
+            query = catalog.tags().provenance(arguments.provenance).limit(arguments.limit)
+            if arguments.name_regex is not None:
+                query = query.where(tag_name.regex(arguments.name_regex))
+            query = query.sort(_available_tag_query_order(arguments.sort_by, arguments.reverse))
+            available_tags = query.fetch()
+            total_matches = query.count()
         _print_available_tags(
             root,
             name_regex=arguments.name_regex,
             provenance=arguments.provenance,
             sort_by=arguments.sort_by,
             reverse=arguments.reverse,
-            result=available_result,
+            usages=available_tags,
+            total_matches=total_matches,
         )
         return
     if arguments.tag_command == "find":
-        tag_limit = None if arguments.all_tags else arguments.display_tag_limit
         with Catalog.open(database_path) as catalog:
-            tag_result = catalog.search_content_by_tags(
-                root,
-                arguments.tags,
-                match=arguments.match,
-                provenance=arguments.provenance,
-                limit=arguments.limit,
-                path_limit=arguments.path_limit,
-                tag_limit=tag_limit,
+            predicate = (
+                tags_field.all_of(*arguments.tags, provenance=arguments.provenance)
+                if arguments.match == "all"
+                else tags_field.any_of(*arguments.tags, provenance=arguments.provenance)
             )
+            base = catalog.contents().where(predicate).limit(arguments.limit)
+            detail = base.with_details(
+                root=root,
+                path_limit=arguments.path_limit,
+                tag_limit=arguments.display_tag_limit,
+                all_tags=arguments.all_tags,
+            )
+            tag_contents = detail.fetch()
+            total_matches = base.count()
+            total_current_paths = detail.current_path_count()
         _print_tag_search(
             root,
             arguments.tags,
             match=arguments.match,
             provenance=arguments.provenance,
-            result=tag_result,
+            contents=tag_contents,
+            total_matches=total_matches,
+            total_current_paths=total_current_paths,
             details=arguments.details,
             all_tags=arguments.all_tags,
         )
@@ -382,9 +390,10 @@ def _print_available_tags(
     *,
     name_regex: str | None,
     provenance: TagProvenanceKind | None,
-    sort_by: AvailableTagSort,
+    sort_by: CliTagSort,
     reverse: bool,
-    result: AvailableTagSearch,
+    usages: tuple[TagUsage, ...],
+    total_matches: int,
 ) -> None:
     print("Available tags")
     print(f"Root: {root}")
@@ -392,12 +401,12 @@ def _print_available_tags(
     print(f"Provenance: {provenance or 'all'}")
     if name_regex is not None:
         print(f"Regex: {name_regex}")
-    if not result.tags:
+    if not usages:
         print("No matching active tags.")
     else:
-        for line in _format_available_tag_table(result.tags, terminal_width=_terminal_width()):
+        for line in _format_available_tag_table(usages, terminal_width=_terminal_width()):
             print(line)
-    print(_format_available_tag_summary(result))
+    print(_format_available_tag_summary(usages, total_matches))
 
 
 def _format_available_tag_table(tags: tuple[TagUsage, ...], *, terminal_width: int) -> tuple[str, ...]:
@@ -425,37 +434,39 @@ def _format_available_tag_table(tags: tuple[TagUsage, ...], *, terminal_width: i
     return (header, "-" * len(header), *rows)
 
 
-def _format_available_tag_summary(result: AvailableTagSearch) -> str:
-    tag_label = "active tag" if result.total_matches == 1 else "active tags"
-    displayed = len(result.tags)
-    qualifier = "first" if displayed < result.total_matches else "all"
-    return f"Matched: {result.total_matches:,} {tag_label} (showing {qualifier} {displayed:,})"
+def _format_available_tag_summary(usages: tuple[TagUsage, ...], total_matches: int) -> str:
+    tag_label = "active tag" if total_matches == 1 else "active tags"
+    displayed = len(usages)
+    qualifier = "first" if displayed < total_matches else "all"
+    return f"Matched: {total_matches:,} {tag_label} (showing {qualifier} {displayed:,})"
 
 
 def _print_tag_search(
     root: Path,
     requested_tags: Sequence[str],
     *,
-    match: TagMatchMode,
+    match: CliTagMatch,
     provenance: str | None,
-    result: MultiTagContentSearch,
+    contents: tuple[ContentTagView, ...],
+    total_matches: int,
+    total_current_paths: int,
     details: bool,
     all_tags: bool,
 ) -> None:
     print("Tagged content")
     print(f"Root: {root}")
     print(f"Provenance: {provenance or 'all'}")
-    if not result.contents:
+    if not contents:
         print("No matching content.")
     else:
         for line in _format_tag_content_table(
-            result.contents,
+            contents,
             terminal_width=_terminal_width(),
             details=details,
             all_tags=all_tags,
         ):
             print(line)
-    print(_format_tag_match_summary(result))
+    print(_format_tag_match_summary(contents, total_matches, total_current_paths))
     unique_tags = tuple(dict.fromkeys(requested_tags))
     operator = " AND " if match == "all" else " OR "
     print(f"Required tags: {operator.join(unique_tags)}")
@@ -503,14 +514,16 @@ def _format_content_tag_lines(content: ContentTagView, *, tag_width: int, all_ta
     return (_truncate_text(f"{joined_tags}{suffix}", tag_width),)
 
 
-def _format_tag_match_summary(result: MultiTagContentSearch) -> str:
-    content_label = "content identity" if result.total_matches == 1 else "content identities"
-    path_label = "current path" if result.total_current_paths == 1 else "current paths"
-    displayed = len(result.contents)
-    qualifier = "first" if displayed < result.total_matches else "all"
+def _format_tag_match_summary(
+    contents: tuple[ContentTagView, ...], total_matches: int, total_current_paths: int
+) -> str:
+    content_label = "content identity" if total_matches == 1 else "content identities"
+    path_label = "current path" if total_current_paths == 1 else "current paths"
+    displayed = len(contents)
+    qualifier = "first" if displayed < total_matches else "all"
     return (
-        f"Matched: {result.total_matches:,} {content_label} · "
-        f"{result.total_current_paths:,} {path_label} (showing {qualifier} {displayed:,})"
+        f"Matched: {total_matches:,} {content_label} · "
+        f"{total_current_paths:,} {path_label} (showing {qualifier} {displayed:,})"
     )
 
 
@@ -592,28 +605,27 @@ def _show_files(
     *,
     path_glob: str | None,
     limit: int,
-    sort_by: CurrentFileSort,
+    sort_by: CliFileSort,
     reverse: bool,
 ) -> None:
     root, database_path = _catalog_paths(root_argument)
     with Catalog.open(database_path) as catalog:
-        result = catalog.search_current_files(
-            root,
-            path_glob=path_glob,
-            limit=limit,
-            sort_by=sort_by,
-            reverse=reverse,
-        )
+        query = catalog.files(root).sort(_current_file_query_order(sort_by, reverse)).limit(limit)
+        if path_glob is not None:
+            query = query.where(path.glob(path_glob))
+        files = query.fetch()
+        total_matches = query.count()
+        total_size_bytes = query.total_size_bytes()
     direction = _sort_direction(sort_by, reverse)
     print("Current files")
     print(f"Root: {root}")
     print(f"Sort: {sort_by} ({direction})")
-    if not result.files:
+    if not files:
         print("No matching files.")
     else:
-        for line in _format_file_table(result.files, _terminal_width()):
+        for line in _format_file_table(files, _terminal_width()):
             print(line)
-    print(_format_file_match_summary(result.total_matches, result.total_size_bytes, len(result.files)))
+    print(_format_file_match_summary(total_matches, total_size_bytes, len(files)))
 
 
 def _show_tagged_files(
@@ -621,46 +633,49 @@ def _show_tagged_files(
     *,
     path_glob: str | None,
     tags: tuple[str, ...],
-    match: TagMatchMode,
+    match: CliTagMatch,
     provenance: TagProvenanceKind | None,
     limit: int,
-    sort_by: CurrentFileSort,
+    sort_by: CliFileSort,
     reverse: bool,
-    tag_limit: int | None,
+    tag_limit: int,
     all_tags: bool,
 ) -> None:
     root, database_path = _catalog_paths(root_argument)
     with Catalog.open(database_path) as catalog:
-        result = catalog.search_current_files_with_tags(
-            root,
-            path_glob=path_glob,
-            tags=tags,
-            match=match,
-            provenance=provenance,
-            limit=limit,
-            sort_by=sort_by,
-            reverse=reverse,
-            tag_limit=tag_limit,
-        )
+        query = catalog.files(root).sort(_current_file_query_order(sort_by, reverse)).limit(limit)
+        if path_glob is not None:
+            query = query.where(path.glob(path_glob))
+        if tags:
+            predicate = (
+                tags_field.all_of(*tags, provenance=provenance)
+                if match == "all"
+                else tags_field.any_of(*tags, provenance=provenance)
+            )
+            query = query.where(predicate)
+        files = query.with_tags(limit=tag_limit, all_tags=all_tags).fetch()
+        total_file_count = query.count()
+        total_content_count = query.distinct_content_count()
+        total_file_size_bytes = query.total_size_bytes()
     direction = _sort_direction(sort_by, reverse)
     print("Current files")
     print(f"Root: {root}")
     print(f"Sort: {sort_by} ({direction})")
-    if not result.files:
+    if not files:
         print("No matching files.")
     else:
         for line in _format_tagged_file_table(
-            result.files,
+            files,
             terminal_width=_terminal_width(),
             all_tags=all_tags,
         ):
             print(line)
     print(
         _format_tagged_file_match_summary(
-            result.total_file_count,
-            result.total_content_count,
-            result.total_file_size_bytes,
-            len(result.files),
+            total_file_count,
+            total_content_count,
+            total_file_size_bytes,
+            len(files),
         )
     )
     if tags:
@@ -792,18 +807,40 @@ def _truncate_text(text: str, width: int) -> str:
     return f"{text[: width - 1]}…"
 
 
-def _sort_direction(sort_by: CurrentFileSort, reverse: bool) -> str:
+def _sort_direction(sort_by: CliFileSort, reverse: bool) -> str:
     direction = "ascending" if sort_by == "path" else "descending"
     if reverse:
         return "descending" if direction == "ascending" else "ascending"
     return direction
 
 
-def _available_tag_sort_direction(sort_by: AvailableTagSort, reverse: bool) -> str:
+def _current_file_query_order(sort_by: CliFileSort, reverse: bool) -> SortExpression:
+    ordering = {"path": path.asc(), "size": size.desc(), "date": mtime.desc()}[sort_by]
+    if not reverse:
+        return ordering
+    return {"path": path.desc(), "size": size.asc(), "date": mtime.asc()}[sort_by]
+
+
+def _available_tag_sort_direction(sort_by: CliTagSort, reverse: bool) -> str:
     direction = "ascending" if sort_by == "name" else "descending"
     if reverse:
         return "descending" if direction == "ascending" else "ascending"
     return direction
+
+
+def _available_tag_query_order(sort_by: CliTagSort, reverse: bool) -> SortExpression:
+    ordering = {
+        "name": tag_name.asc(),
+        "content": tag_usage.content_count.desc(),
+        "assertions": tag_usage.assertion_count.desc(),
+    }[sort_by]
+    if not reverse:
+        return ordering
+    return {
+        "name": tag_name.desc(),
+        "content": tag_usage.content_count.asc(),
+        "assertions": tag_usage.assertion_count.asc(),
+    }[sort_by]
 
 
 def _catalog_paths(root_argument: Path) -> tuple[Path, Path]:

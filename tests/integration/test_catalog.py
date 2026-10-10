@@ -5,6 +5,7 @@ import pytest
 
 from archiver import Catalog, ContentId, InvalidCatalogError, ScanFailure, ScanProgress
 from archiver.hashing import hash_file
+from archiver.query import content
 
 
 def test_create_close_and_reopen_preserves_catalog_metadata(tmp_path: Path) -> None:
@@ -40,7 +41,7 @@ def test_scan_single_file_and_keep_source_unchanged(tmp_path: Path) -> None:
     catalog = Catalog.create(tmp_path / "catalog.sqlite")
 
     summary = catalog.scan_directory(source)
-    files = catalog.current_files(source)
+    files = list(catalog.files(source).stream_all())
 
     assert summary.files_observed == 1
     assert summary.total_bytes_observed == len(before)
@@ -61,7 +62,7 @@ def test_scan_nested_paths_are_relative_and_deterministic(tmp_path: Path) -> Non
 
     catalog.scan_directory(source)
 
-    assert [item.relative_path.as_posix() for item in catalog.current_files(source)] == [
+    assert [item.relative_path.as_posix() for item in catalog.files(source).stream_all()] == [
         "a.txt",
         "b/c.txt",
     ]
@@ -105,12 +106,12 @@ def test_rename_preserves_content_identity_between_scans(tmp_path: Path) -> None
     original.write_bytes(b"unchanged")
     catalog = Catalog.create(tmp_path / "catalog.sqlite")
     catalog.scan_directory(source)
-    content_id = catalog.current_files(source)[0].content_id
+    content_id = catalog.files(source).first().content_id  # type: ignore[union-attr]
     original.rename(source / "new.txt")
 
     catalog.scan_directory(source)
 
-    current = catalog.current_files(source)
+    current = list(catalog.files(source).stream_all())
     assert current[0].relative_path.as_posix() == "new.txt"
     assert current[0].content_id == content_id
 
@@ -128,7 +129,7 @@ def test_deletion_disappears_from_current_state(tmp_path: Path) -> None:
 
     catalog.scan_directory(source)
 
-    assert [item.relative_path.as_posix() for item in catalog.current_files(source)] == ["retained.txt"]
+    assert [item.relative_path.as_posix() for item in catalog.files(source).stream_all()] == ["retained.txt"]
 
 
 def test_changed_path_points_to_new_content_after_a_later_scan(tmp_path: Path) -> None:
@@ -138,12 +139,12 @@ def test_changed_path_points_to_new_content_after_a_later_scan(tmp_path: Path) -
     file_path.write_bytes(b"first")
     catalog = Catalog.create(tmp_path / "catalog.sqlite")
     catalog.scan_directory(source)
-    first_content = catalog.current_files(source)[0].content_id
+    first_content = catalog.files(source).first().content_id  # type: ignore[union-attr]
     file_path.write_bytes(b"second")
 
     catalog.scan_directory(source)
 
-    assert catalog.current_files(source)[0].content_id != first_content
+    assert catalog.files(source).first().content_id != first_content  # type: ignore[union-attr]
 
 
 def test_symlinks_are_not_followed(tmp_path: Path) -> None:
@@ -160,7 +161,7 @@ def test_symlinks_are_not_followed(tmp_path: Path) -> None:
 
     catalog.scan_directory(source)
 
-    assert catalog.current_files(source) == []
+    assert list(catalog.files(source).stream_all()) == []
 
 
 def test_failed_scan_preserves_previous_current_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -170,7 +171,7 @@ def test_failed_scan_preserves_previous_current_state(tmp_path: Path, monkeypatc
     file_path.write_bytes(b"first")
     catalog = Catalog.create(tmp_path / "catalog.sqlite")
     catalog.scan_directory(source)
-    expected = catalog.current_files(source)
+    expected = list(catalog.files(source).stream_all())
     file_path.write_bytes(b"second")
 
     def fail_hashing(path: Path) -> ContentId:
@@ -180,7 +181,7 @@ def test_failed_scan_preserves_previous_current_state(tmp_path: Path, monkeypatc
     with pytest.raises(ScanFailure, match="reconciliation failed"):
         catalog.scan_directory(source)
 
-    assert catalog.current_files(source) == expected
+    assert list(catalog.files(source).stream_all()) == expected
 
 
 def test_catalog_database_and_sidecars_are_excluded_when_inside_root(tmp_path: Path) -> None:
@@ -192,7 +193,7 @@ def test_catalog_database_and_sidecars_are_excluded_when_inside_root(tmp_path: P
 
     catalog.scan_directory(source)
 
-    assert [item.relative_path.as_posix() for item in catalog.current_files(source)] == ["entry.txt"]
+    assert [item.relative_path.as_posix() for item in catalog.files(source).stream_all()] == ["entry.txt"]
 
 
 def test_observation_history_retains_complete_context_across_scans(tmp_path: Path) -> None:
@@ -278,7 +279,7 @@ def test_history_includes_empty_and_failed_scans_without_observations(
 
     catalog.scan_directory(empty_root)
     catalog.scan_directory(source)
-    expected_current = catalog.current_files(source)
+    expected_current = list(catalog.files(source).stream_all())
     file_path.write_bytes(b"second")
 
     def fail_hashing(path: Path) -> ContentId:
@@ -295,7 +296,7 @@ def test_history_includes_empty_and_failed_scans_without_observations(
     assert scans[0].location.root == empty_root.resolve()
     assert scans[0].completed_at_ns is not None
     assert [observation.relative_path.as_posix() for observation in history] == ["entry.txt"]
-    assert catalog.current_files(source) == expected_current
+    assert list(catalog.files(source).stream_all()) == expected_current
 
 
 def test_observation_history_is_lazy_and_current_queries_exclude_history_only_rows(tmp_path: Path) -> None:
@@ -317,9 +318,9 @@ def test_observation_history_is_lazy_and_current_queries_exclude_history_only_ro
     second.write_bytes(b"current second")
     catalog.scan_directory(source)
 
-    assert catalog.find_by_content(source, historical_content) == []
+    assert list(catalog.files(source).where(content.is_(historical_content)).stream_all()) == []
     assert catalog.duplicates(source).fetch() == ()
-    assert [item.relative_path.as_posix() for item in catalog.current_files(source)] == ["first.txt", "second.txt"]
+    assert [item.relative_path.as_posix() for item in catalog.files(source).stream_all()] == ["first.txt", "second.txt"]
 
 
 def test_scan_progress_reports_persisted_completed_work_and_posix_paths(tmp_path: Path) -> None:
@@ -342,7 +343,7 @@ def test_scan_progress_reports_persisted_completed_work_and_posix_paths(tmp_path
         (3, 8, "two.txt"),
     ]
     assert all(item.elapsed_seconds >= 0 for item in progress)
-    assert [item.relative_path.as_posix() for item in catalog.current_files(source)] == [
+    assert [item.relative_path.as_posix() for item in catalog.files(source).stream_all()] == [
         "empty",
         "nested/one.txt",
         "two.txt",
@@ -358,7 +359,7 @@ def test_progress_callback_failure_preserves_previous_current_state(
     file_path.write_bytes(b"first")
     catalog = Catalog.create(tmp_path / "catalog.sqlite")
     catalog.scan_directory(source)
-    expected = catalog.current_files(source)
+    expected = list(catalog.files(source).stream_all())
     file_path.write_bytes(b"second")
 
     def fail_progress(progress: ScanProgress) -> None:
@@ -367,7 +368,7 @@ def test_progress_callback_failure_preserves_previous_current_state(
     with pytest.raises(ScanFailure, match="reconciliation failed"):
         catalog.scan_directory(source, progress_callback=fail_progress)
 
-    assert catalog.current_files(source) == expected
+    assert list(catalog.files(source).stream_all()) == expected
 
 
 def test_progress_excludes_control_directory_and_preserves_source(tmp_path: Path) -> None:

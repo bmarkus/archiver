@@ -18,9 +18,10 @@ def test_reconciliation_is_write_free_reuses_metadata_and_persists_metadata_only
     with Catalog.create(tmp_path / "catalog.sqlite") as catalog:
         initial = catalog.reconcile_directory(root)
         assert [change.kind for change in initial.changes] == ["new"]
-        assert catalog.current_files(root) == []
+        assert list(catalog.files(root).stream_all()) == []
         catalog.apply_refresh(initial)
-        original = catalog.current_files(root)[0]
+        original = catalog.files(root).first()
+        assert original is not None
 
         def should_not_hash(_: Path) -> tuple[object, int, int]:
             raise AssertionError("metadata-matched files must reuse the known content identity")
@@ -39,7 +40,9 @@ def test_reconciliation_is_write_free_reuses_metadata_and_persists_metadata_only
         assert change.previous is not None and change.current is not None
         assert change.current.content_id == change.previous.content_id
         catalog.apply_refresh(metadata_only)
-        assert catalog.current_files(root)[0].mtime_ns == original.mtime_ns + 1_000_000_000
+        current = catalog.files(root).first()
+        assert current is not None
+        assert current.mtime_ns == original.mtime_ns + 1_000_000_000
 
 
 def test_reconciliation_reports_new_modified_missing_and_rejects_stale_apply(tmp_path: Path) -> None:
@@ -78,7 +81,7 @@ def test_detectable_hash_failure_returns_no_change_set_and_preserves_current_sta
     entry.write_bytes(b"first")
     with Catalog.create(tmp_path / "catalog.sqlite") as catalog:
         catalog.scan_directory(root)
-        before = catalog.current_files(root)
+        before = list(catalog.files(root).stream_all())
         entry.write_bytes(b"second")
 
         def changed_during_hash(_: Path) -> tuple[object, int, int]:
@@ -87,4 +90,4 @@ def test_detectable_hash_failure_returns_no_change_set_and_preserves_current_sta
         monkeypatch.setattr("archiver.catalog.hash_file_stably", changed_during_hash)
         with pytest.raises(RefreshFailure, match="reconciliation failed"):
             catalog.reconcile_directory(root)
-        assert catalog.current_files(root) == before
+        assert list(catalog.files(root).stream_all()) == before
