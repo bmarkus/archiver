@@ -125,7 +125,7 @@ def test_all_cli_query_domains_have_stable_empty_states(
         ["files", "--limit", "0"],
         ["files", "--match-any-tag"],
         ["files", "--provenance", "user"],
-        ["duplicates", "--member-limit", "0"],
+        ["duplicates", "--member-limit", "-1"],
         ["duplicates", "--group-limit", "True"],
         ["tags", "find", "valid", "--all-tags", "--display-tag-limit", "1"],
         ["tags", "available", "--regex", "["],
@@ -185,6 +185,9 @@ def test_cli_default_bounds_keep_complete_totals_and_sources_unchanged(
     output = capsys.readouterr().out
     assert "Duplicate groups: 21" in output and "Duplicate file instances: 61" in output
     assert "Showing first 20 of 21 duplicate groups." in output
+    assert "PATHS" not in output and "g00/copy" not in output
+    assert main(["catalog", "duplicates", str(tmp_path), "--details", "--member-limit", "20"]) == 0
+    output = capsys.readouterr().out
     assert "20 of 21" in output and "g00/copy19.bin" in output and "g00/copy20.bin" not in output
 
     assert main(["catalog", "tags", "find", str(tmp_path), "common"]) == 0

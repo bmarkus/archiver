@@ -12,7 +12,8 @@ leave source files unchanged. Catalog mutations require explicit commands.
 | `catalog files ROOT` | `files(root)` with separate count/size reductions | 20 files |
 | `catalog files ROOT --show-tags` or tag options | File predicates and `with_tags()`; separate file/content/size reductions | 20 files, 3 active tag names per content |
 | `catalog duplicates ROOT` | `duplicates(root).summary()` after exact current-scan check | Summary only |
-| `catalog duplicates ROOT --details` | Duplicate query `fetch()` plus complete summary | 20 groups, 20 member paths per group |
+| `catalog duplicates ROOT --details` | Bounded duplicate group `stream()` plus complete summary | 20 group metric rows; no filenames |
+| `catalog duplicates ROOT --details --member-limit N` (N > 0) | Duplicate query `fetch()` plus complete summary | 20 groups, at most N member paths per group |
 | `catalog tags find ROOT TAG [TAG ...]` | `contents()` predicates and `with_details(root=...)` | 20 content identities, 3 active tag names each |
 | `catalog tags find ROOT TAG --details` | Same content detail query, displaying its path previews | Also 20 paths per content identity |
 | `catalog tags available ROOT` | `tags()` vocabulary query and complete count | 20 active tag names |
@@ -45,7 +46,15 @@ Size/date ties always use ascending relative paths, including under reverse.
 
 Duplicate details order groups by complete potential redundant bytes descending,
 then full content algorithm/digest ascending. Members use relative path ascending.
-`--group-limit N` and `--member-limit N` independently bound the preview. Empty
+`--details` defaults to a table of group metrics without filenames. The default
+`--member-limit 0` also suppresses the PATHS preview-count column and avoids
+fetching member rows. Set `--member-limit N` to a positive value to include at
+most N filenames per group; `--member-limit 20` restores the earlier CLI preview.
+`--group-limit N` remains positive and defaults to 20 groups. The Python API
+still defaults to 20 members and rejects `.member_limit(0)`; this CLI-only mode
+uses bounded group handles rather than passing zero to that API. Member
+paths appear on separate lines with an additional leading tab before their
+existing indentation, visually nesting them below each group status row. Empty
 files can form duplicate groups with zero redundant bytes. Summary-only output
 does not fetch member rows. There is no CLI group-sort or unbounded stream flag.
 
@@ -63,7 +72,8 @@ is ascending by default; `--sort content|assertions` sorts usage descending.
 
 Tagged file/content previews accept `--display-tag-limit N` or `--all-tags`,
 mutually exclusively. All-tags display wraps tag names and retains bounded
-parent rows. Numeric limits must be positive integers. Default previews show
+parent rows. Group/row/tag limits must be positive integers; the CLI duplicate member limit
+accepts nonnegative integers. Default previews show
 an overflow count when tags are omitted. Tables abbreviate SHA-256 digests for
 display; exact `tags add|remove|list --content SHA256` requires the full lowercase
 64-character digest. A displayed prefix is never an identity selector.
@@ -76,7 +86,8 @@ paths and bounded previews may be truncated. All-tags mode wraps tag text.
 
 `--group-offset N` skips N duplicate groups before `--group-limit` is applied.
 The default is 0; offsets are zero-based and displayed GROUP numbers are
-one-based. Group and member limits still default to 20 independently.
+one-based. The group limit defaults to 20. The CLI member limit defaults to 0
+(a metrics-only table); positive member limits add bounded filename previews.
 
 ```powershell
 uv run archiver catalog duplicates ROOT --details --group-offset 10 --group-limit 10

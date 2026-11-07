@@ -34,7 +34,7 @@ from .models import (
     TagUsage,
     validate_tag_name,
 )
-from .query import SortExpression, mtime, path, size, tag_name, tag_usage
+from .query import DuplicateGroupHandle, SortExpression, mtime, path, size, tag_name, tag_usage
 from .query import tags as tags_field
 
 CliFileSort: TypeAlias = Literal["path", "size", "date"]
@@ -158,7 +158,7 @@ def _build_parser() -> argparse.ArgumentParser:
                 help="render progress every FILES files (default: 100)",
             )
         if command == "duplicates":
-            subparser.add_argument("--details", action="store_true", help="show bounded duplicate groups and paths")
+            subparser.add_argument("--details", action="store_true", help="show a bounded duplicate group table")
             subparser.add_argument(
                 "--group-limit",
                 type=_positive_int,
@@ -175,10 +175,10 @@ def _build_parser() -> argparse.ArgumentParser:
             )
             subparser.add_argument(
                 "--member-limit",
-                type=_positive_int,
-                default=20,
+                type=_nonnegative_int,
+                default=0,
                 metavar="N",
-                help="maximum paths to display per group (default: 20)",
+                help="maximum paths per group; 0 shows only group metrics (default: 0)",
             )
         if command == "files":
             subparser.add_argument("--path", dest="path_glob", metavar="GLOB", help="match POSIX relative paths")
@@ -601,12 +601,15 @@ def _show_duplicate_summary(
         if catalog.current_scan(root) is None:
             print("Current scan: none")
             return
-        query = catalog.duplicates(root).offset(group_offset).limit(group_limit).member_limit(member_limit)
+        query = catalog.duplicates(root).offset(group_offset).limit(group_limit)
+        if member_limit:
+            query = query.member_limit(member_limit)
         summary = query.summary()
         _print_duplicate_summary(summary)
         if not details:
             return
-        _print_duplicate_details(query.fetch(), summary, group_offset=group_offset)
+        groups = query.fetch() if member_limit else tuple(query.stream())
+        _print_duplicate_details(groups, summary, group_offset=group_offset)
 
 
 def _show_files(
@@ -893,6 +896,13 @@ def _group_offset(value: str) -> int:
     return parsed
 
 
+def _nonnegative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be at least 0")
+    return parsed
+
+
 def _positive_int(value: str) -> int:
     parsed = int(value)
     if parsed < 1:
@@ -953,7 +963,7 @@ def _print_duplicate_summary(summary: DuplicateSummary) -> None:
 
 
 def _print_duplicate_details(
-    groups: Sequence[DuplicateGroupView], summary: DuplicateSummary, *, group_offset: int = 0
+    groups: Sequence[DuplicateGroupView | DuplicateGroupHandle], summary: DuplicateSummary, *, group_offset: int = 0
 ) -> None:
     if not groups:
         if group_offset:
@@ -961,8 +971,9 @@ def _print_duplicate_details(
         else:
             print("No duplicate groups.")
         return
-    print("GROUP  SHA-256        COPIES  SIZE   POTENTIAL REDUNDANT  PATHS")
-    print("-----  ------------   ------  -----  -------------------  -----")
+    show_members = isinstance(groups[0], DuplicateGroupView)
+    print("GROUP  SHA-256        COPIES  SIZE   POTENTIAL REDUNDANT" + ("  PATHS" if show_members else ""))
+    print("-----  ------------   ------  -----  -------------------" + ("  -----" if show_members else ""))
     for index, group in enumerate(groups, start=group_offset + 1):
         _print_duplicate_group(index, group)
     displayed = len(groups)
@@ -974,16 +985,18 @@ def _print_duplicate_details(
         print(f"Showing {qualifier} {displayed} of {total} duplicate groups.")
 
 
-def _print_duplicate_group(index: int, group: DuplicateGroupView) -> None:
-    displayed = len(group.members)
-    path_count = f"{displayed} of {group.file_instance_count}"
-    print(
+def _print_duplicate_group(index: int, group: DuplicateGroupView | DuplicateGroupHandle) -> None:
+    metrics = (
         f"{index:<5}  {_short_digest(group.content_id.digest):<12}  "
         f"{group.file_instance_count:<6}  {_format_byte_count(group.size_bytes):<5}  "
-        f"{_format_byte_count(group.potential_redundant_bytes):<19}  {path_count}"
+        f"{_format_byte_count(group.potential_redundant_bytes):<19}"
     )
-    for member in group.members:
-        print(f"       {member.relative_path.as_posix()}")
+    if isinstance(group, DuplicateGroupView):
+        print(f"{metrics}  {len(group.members)} of {group.file_instance_count}")
+        for member in group.members:
+            print(f"\t       {member.relative_path.as_posix()}")
+    else:
+        print(metrics.rstrip())
 
 
 def _format_byte_count(byte_count: int) -> str:

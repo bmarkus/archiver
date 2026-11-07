@@ -149,6 +149,10 @@ duplicates(root: Path) -> DuplicateGroupQuery
 
 Build a lazy query for current content groups with more than one file instance at one root. Default: 20 groups, 20 members each, redundant bytes descending with full identity ascending ties. `fetch()` returns `tuple[DuplicateGroupView, ...]`.
 
+The CLI `--details` defaults to a metrics-only table; positive `--member-limit N`
+adds filenames. This does not change the Python query’s positive member limit
+or its default of 20. See the [CLI reference](catalog-cli.md).
+
 Use `offset(count).limit(count)` on this returned query for group pages; offsets
 are zero-based, default to zero, and apply to the current successful scan at
 execution. See [duplicate pagination](query-grammar.md#duplicate-pagination) for

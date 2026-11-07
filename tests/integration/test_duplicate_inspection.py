@@ -353,7 +353,7 @@ def test_catalog_duplicates_details_are_bounded_and_aggregate_output_is_compatib
     assert f"1      {digest[:12]}…" in details
     assert "3       5 B    10 B" in details
     assert "1 of 3" in details
-    assert "       large/a.bin" in details
+    assert "\n\t       large/a.bin\n" in details
     assert "large/m.bin" not in details
     assert "... showing first 1 of 3 paths" not in details
     assert "Showing first 1 of 2 duplicate groups." in details

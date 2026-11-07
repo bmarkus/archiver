@@ -55,7 +55,7 @@ def test_cli_middle_last_partial_and_empty_pages_preserve_totals_and_member_boun
         assert f"Showing groups {start}-{end} of 100 duplicate groups." in output.out
         digest = hashlib.sha256(bytes([101 - start]) * (101 - start)).hexdigest()[:12]
         assert f"{start:<5}  {digest}" in output.out
-        assert f"g{101 - start:03}/copy0.bin" in output.out
+        assert f"\n\t       g{101 - start:03}/copy0.bin\n" in output.out
         assert "copy1.bin" not in output.out
     for offset in (100, 101, 2**63 - 1):
         assert main(["catalog", "duplicates", str(tmp_path), "--details", "--group-offset", str(offset)]) == 0
@@ -133,7 +133,9 @@ def test_cli_summary_and_fetch_can_resolve_different_successful_scans(
         return original_fetch(query)
 
     monkeypatch.setattr(DuplicateGroupQuery, "fetch", refresh_before_fetch)
-    assert main(["catalog", "duplicates", str(tmp_path), "--details", "--group-offset", "1"]) == 0
+    assert (
+        main(["catalog", "duplicates", str(tmp_path), "--details", "--group-offset", "1", "--member-limit", "1"]) == 0
+    )
     output = capsys.readouterr().out
     assert "Duplicate groups: 3" in output  # Complete summary before the refresh.
     assert "g001/copy0.bin" in output and "g002/copy0.bin" not in output  # Page after refresh.

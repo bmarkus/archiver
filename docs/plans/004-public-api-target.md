@@ -23,6 +23,13 @@ paging snapshot/session. CLI `--group-offset` preserves offset-zero output and
 uses one-based absolute numbers/ranges for nonzero pages. Earlier dated
 implementation outcomes remain historical.
 
+CLI display amended 2026-11-07 at the user's request:
+[Bugfix 005](../bugfixes/005-duplicate-table-default.md) makes `duplicates --details`
+show group metrics by default (`--member-limit 0`), using existing bounded group
+handles without member queries. Positive CLI member limits retain previews.
+Python API member limits/defaults remain unchanged. Prior dated default/output
+records describe their historical checkpoint.
+
 ## Decisions and boundaries
 
 Four public query constructors represent four result domains:

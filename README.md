@@ -171,7 +171,14 @@ Preview reconciliation without changing the catalog:
 uv run archiver catalog refresh C:\path\to\root --dry-run --details changes
 ```
 
-Inspect duplicate groups with bounded member output:
+Inspect a table of duplicate groups without filenames (20 groups by default):
+
+```powershell
+uv run archiver catalog duplicates C:\path\to\root --details
+```
+
+`--member-limit 0` explicitly selects that same table. Add a positive member
+limit to display filenames beneath each group:
 
 ```powershell
 uv run archiver catalog duplicates C:\path\to\root --details --group-limit 20 --member-limit 20

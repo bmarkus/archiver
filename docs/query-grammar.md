@@ -276,7 +276,10 @@ summary = query.summary()
 ```
 
 New duplicate queries default to at most 20 groups and 20 displayed members per
-group. `limit()` and `member_limit()` replace those bounds immutably and accept
+group. These are Python API defaults. The CLI `--details` defaults to group
+metrics only (`--member-limit 0`); a positive CLI member limit opts into filenames
+through the existing bounded fetch. The API still requires positive member
+limits. `limit()` and `member_limit()` replace those bounds immutably and accept
 only positive integers. `sort()` accepts `size.asc()/desc()`,
 `duplicate.file_count.asc()/desc()`, or
 `duplicate.redundant_bytes.asc()/desc()`. Repeated sorting replaces the earlier
