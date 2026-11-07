@@ -1,4 +1,4 @@
-"""Run a safe demonstration of the Plan 001 catalog API.
+"""Run a safe demonstration of the current catalog API.
 
 Execute with: ``uv run python examples/playground.py --keep``.
 """
@@ -44,7 +44,7 @@ def run(workspace: Path) -> None:
         print("Scan summary:")
         print(summary)
         print("\nCurrent files:")
-        for observation in catalog.current_files(source):
+        for observation in catalog.files(source).stream_all():
             print(f"- {observation.relative_path} ({observation.content_id.digest[:12]}...)")
         print("\nDuplicate groups:")
         for group in catalog.duplicates(source).fetch():

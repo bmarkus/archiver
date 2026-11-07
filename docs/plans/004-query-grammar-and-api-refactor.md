@@ -1,10 +1,28 @@
 # Plan 004 — Query Grammar and API Refactor
 
-**Status:** Approved  
+**Status:** Implemented pending review (2026-11-07)
 **Related plans:** [001.1](001.1-streaming-history-query-apis.md), [001.5](001.5-bounded-current-file-browsing.md), [003](003-bounded-duplicate-inspection.md), [003.2](003.2-content-level-tags.md), [003.3](003.3-bounded-tag-and-file-search.md)  
 **Sequence:** 004  
 **Created:** 2026-09-03  
 **Approved:** 2026-09-03
+
+## Implementation amendment — 2026-11-07
+
+At the user's subsequent request, [004.9 — Duplicate Pagination](004.9-duplicate-pagination.md)
+is now implemented, including `.offset()`, CLI `--group-offset`, tests, API/CLI
+references, and an executable pagination notebook. The preparation checkpoint
+and baseline 004.1–004.8 outcomes below remain historical. The current umbrella
+implementation includes 004.9 and remains pending review. No subsequent plan is active.
+
+## Planning amendment — 2026-11-07
+
+At the user's request, [004.9 — Duplicate Pagination](004.9-duplicate-pagination.md)
+is prepared as a follow-up to the completed 004.1–004.8 baseline. It specifies
+immutable `.offset()` on duplicate queries and CLI `--group-offset`, including
+live paging across refreshes, validation, tests, and documentation. It is not
+active or implemented. The implementation status and final review below record
+the baseline through 004.8; this amendment does not rewrite those outcomes or
+claim pagination is available. Do not start 004.9 until explicitly requested.
 
 ## Goal
 
@@ -14,8 +32,10 @@ It extends duplicate groups with typed
 sorting and explicit bounded/unbounded streaming of groups and members to
 support future duplicate-handling workflows. Mutation workflows remain outside
 this query refactor. Plan 004.6 and its four sequential children were
-implemented on 2026-09-30; no subplan is currently active and 004.7 has not
-started.
+implemented on 2026-09-30. [004.7](004.7-public-api-review-and-cleanup.md) was
+implemented on 2026-11-07, including the complete Catalog API reference and
+public consumer audit. [004.8](004.8-cli-consistency-audit.md) completed the CLI
+audit on 2026-11-07. All subplans are implemented; the umbrella is pending review.
 
 Implementation direction amended 2026-09-09 at the user's request. The
 [final public API contract](004-public-api-target.md) and prepared 004.5–004.8
@@ -85,7 +105,7 @@ catalog.tags()
 means current duplicate-content groups at that root. `contents` is catalog-wide
 content, including identities without current paths. `tags` is active vocabulary
 and usage, independent of locations. Historical reads retain their explicit
-iterator APIs. Contents and tags constructors are planned, not implemented.
+iterator APIs. Contents and tags constructors were implemented in Plan 004.6.
 
 Semantic constructors should compose the shared query representation. A useful combination of existing operations should normally not require another `Catalog` method; new methods should represent genuine domain concepts.
 
@@ -251,3 +271,65 @@ Success means replacing specialized internal query implementations with a small,
 ## Completion
 
 Plan 004 is complete only when its approved subplans have met their acceptance criteria and the plan index records their outcomes. Implement and review one subplan at a time. Do not begin a subsequent subplan automatically.
+
+## Final implementation review — 2026-11-07
+
+All approved increments are implemented. This dated outcome records the final
+state; earlier design discussions and implementation records remain historical.
+The [004.8 outcome](004.8-cli-consistency-audit.md#outcome--2026-11-07) closes the
+sequence. No subsequent plan is active.
+
+| Umbrella completion goal | Implemented result and evidence |
+| --- | --- |
+| 004.1: represent and execute current observations without semantic changes | Immutable internal descriptions and SQLite compiler/executor; foundation/current-state tests pass. |
+| 004.2: public current filtering, sorting and bounds | `files(root)` supports typed predicates, deterministic sorts, positive limits and bounded rows. Query and actual CLI ordering tests pass. |
+| 004.3: shared materialization and complete reductions | File fetch/first/streams and complete count/size/distinct-content reductions; bounded and explicit unbounded lifetimes tested. |
+| 004.4: one duplicate query architecture | Fixed content grouping, complete metrics/summary and bounded members; retired facade/adapter absent. |
+| 004.4.1 amendment: typed duplicate sorting and explicit streams | Group/member streams and scan-pinned handles retain approved bounds/lifecycle; existing regression and tutorial coverage passes. |
+| 004.5: tag/content semantics expressed by grammar | Exact content and all/any provenance-aware active-tag predicates preserve identities and prevent assertion fan-out. |
+| 004.6: one internal read architecture | Four constructors, typed file/content detail views and vocabulary; retained exact/history reads use focused private executors. Mutations and lifecycle retain their existing boundary. |
+| 004.7: coherent documented surface and migration | Every member/export classified, documented import paths and full signatures/defaults/returns; obsolete methods/types absent. Current tutorials migrated; historical tutorials identify tested frozen revisions. |
+| 004.8: CLI uses the same model | Four query domains use public queries and typed renderers with explicit totals; CLI defaults/options/errors/output remain compatible. 26 additional CLI cases close integration coverage gaps. |
+
+Every public method classification in the
+[final contract](004-public-api-target.md#catalog-classification-and-migration-owner)
+was reconciled in [004.7](004.7-public-api-review-and-cleanup.md#classification-audit)
+and rechecked at the CLI boundary in 004.8. Retained lifecycle, properties,
+scan/reconcile/apply, exact current/path/tag reads, history, and mutation methods
+keep their signatures. The four supported query constructors are `files`,
+`duplicates`, `contents`, and `tags`. Listed replacements/removals have no
+runtime CLI callers or compatibility shims. The three retained pandas adapters
+remain separate. No additional public removals were made.
+
+Domain/invariant audit: content remains byte-identified, paths remain
+location-scoped observations, current state derives only from successful scans,
+history preserves scan identity, reads leave sources and catalog metadata
+unchanged, and query execution grants no managed-storage authority. SQL is
+private and parameterized; supported expressions use closed mappings.
+Display bounds constrain materialized rows; complete reductions ignore them.
+Multi-statement observation reads pin scans without promising cross-statement
+atomic tag snapshots. No schema changes, general query framework, archive
+authority, or Rust implementation were introduced by Plan 004.
+
+Final gate: **204 passed, 3 skipped**; Ruff lint/format, mypy and whitespace
+checks passed. Current runnable CLI tutorials were re-executed; 004.7 records
+the complete 17-notebook audit. Documentation: [Catalog API](../catalog-api.md),
+[query grammar](../query-grammar.md), and [CLI reference](../catalog-cli.md).
+No unresolved contract gaps or deviations. Implementation is complete pending
+review; this does not record user approval. No next phase has started.
+
+## Duplicate pagination extension outcome — 2026-11-07
+
+[004.9](004.9-duplicate-pagination.md#implementation-outcome--2026-11-07) extends
+the completed baseline with SQL-side group offsets on the existing query path.
+Zero offsets preserve API results and CLI output; member bounds and complete
+summaries remain independent. Fresh pages select live successful scan state;
+started streams/handles retain the scan they resolved. No scan sessions, schema
+changes, new dependencies, or storage authority were introduced.
+
+Acceptance: all 004.9 criteria are accounted for in its outcome, with 34 new test
+cases. Final gate: 238 passed, 3 skipped; Ruff lint/format, mypy, whitespace, and
+local links passed. The new eight-cell notebook and three existing duplicate/
+lifecycle/migration tutorials passed clean-kernel execution. Pagination API and
+CLI documentation are current. No contract gaps or deviations remain; the
+umbrella including 004.9 is implemented pending review. Stop here.

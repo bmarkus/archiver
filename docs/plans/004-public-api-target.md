@@ -1,14 +1,27 @@
 # Plan 004 — Final Public API Contract
 
-Status: Prepared for implementation; design accepted 2026-09-09.
-This document is the shared contract for Plans 004.5–004.8, not a description
-of features already implemented. The domain model and invariants remain authoritative.
+Status: Implemented pending review (2026-11-07); design accepted 2026-09-09.
+This document records the shared contract for Plans 004.5–004.8.
+The [final umbrella review](004-query-grammar-and-api-refactor.md#final-implementation-review--2026-11-07)
+accounts for its implementation; dated readiness notes below remain historical.
+The domain model and invariants remain authoritative.
 
 Amended 2026-09-29 by [004.4.1](004.4.1-duplicate-group-sorting-and-streaming.md):
 typed duplicate sorting and explicit bounded/unbounded group and member streams
 are implemented and approved as of 2026-09-30. Its detailed lifetime and bounds
 contract governs those additions. Readiness review on 2026-09-30 clarified the
 004.6 migration notes; its children remain prepared and unimplemented.
+
+Amended 2026-11-07 by [004.9](004.9-duplicate-pagination.md): duplicate group
+queries add immutable `offset(count: int) -> Self`, default zero, validated as
+an exact integer in `0..2**63 - 1`. Group ordering precedes offset and limit;
+`fetch()`/`stream()` honor both, and `stream_all()` removes only the limit while
+retaining offset. Members are unaffected; complete summaries ignore pagination.
+Fresh terminals use latest successful scan state; started streams and handles
+stay pinned. Refreshes between pages may repeat/skip identities; there is no
+paging snapshot/session. CLI `--group-offset` preserves offset-zero output and
+uses one-based absolute numbers/ranges for nonzero pages. Earlier dated
+implementation outcomes remain historical.
 
 ## Decisions and boundaries
 
@@ -72,7 +85,7 @@ Keep SQL/private tokens out of the documented construction API.
 | Type | Source and transformations | Terminals and result |
 | --- | --- | --- |
 | CurrentFileQuery | files(root); where, sort, limit (default 20) | Existing fetch, first, count, total_size_bytes, stream, stream_all; add distinct_content_count() -> int |
-| DuplicateGroupQuery | duplicates(root); sort, limit, member_limit (both default 20); default redundant bytes descending | fetch() -> tuple[DuplicateGroupView, ...], summary() -> DuplicateSummary; 004.4.1 adds stream()/stream_all() -> Iterator[DuplicateGroupHandle] |
+| DuplicateGroupQuery | duplicates(root); sort, offset (default 0), limit, member_limit (both default 20); default redundant bytes descending | fetch() -> tuple[DuplicateGroupView, ...], summary() -> DuplicateSummary; 004.4.1 adds stream()/stream_all() -> Iterator[DuplicateGroupHandle] |
 | ContentQuery | contents(); where, limit (default 20); fixed full algorithm/digest ascending | fetch() -> tuple[ContentRecord, ...], count() -> int; with_details(...) |
 | TagVocabularyQuery | tags(); where(regex), sort, limit (default 20), provenance(kind) | fetch() -> tuple[TagUsage, ...], count() -> int |
 

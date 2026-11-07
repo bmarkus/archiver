@@ -13,6 +13,7 @@ from .query import (
     _validate_current_file_sort_expression,
     _validate_duplicate_sort_expression,
     _validate_limit,
+    _validate_offset,
     _validate_tag_name_predicate,
     _validate_tag_provenance,
     _validate_tag_vocabulary_sort_expression,
@@ -56,6 +57,7 @@ class DuplicateGroupQueryDescription:
     ordering: SortExpression
     group_limit: int | None
     member_limit: int | None
+    group_offset: int = 0
 
     def __post_init__(self) -> None:
         if self.location.id is None:
@@ -65,6 +67,7 @@ class DuplicateGroupQueryDescription:
         if self.scan_id < 1:
             raise ValueError("a duplicate-group query scan ID must be positive")
         _validate_duplicate_sort_expression(self.ordering)
+        _validate_offset(self.group_offset)
         if self.group_limit is not None:
             _validate_limit(self.group_limit)
         if self.member_limit is not None:

@@ -2,7 +2,8 @@
 
 This document describes the supported public grammar for current files,
 duplicate-content groups, catalog-wide content, and active tag vocabulary. It
-is a usage reference, not an implementation plan.
+is a usage reference, not an implementation plan. For lifecycle, scanning,
+exact/history reads, mutations, and migration, see the [Catalog API reference](catalog-api.md).
 
 The [Plan 004.5 public tutorial](../notebooks/public/plan-004.5-tag-and-content-predicates.ipynb)
 demonstrates content and tag predicates with disposable synthetic files.
@@ -29,8 +30,8 @@ from archiver.query import content, duplicate, mtime, path, size, tags
 | `path` | `glob(pattern)`, `asc()`, `desc()` | Current files |
 | `size` | `asc()`, `desc()` | Current files and duplicate groups |
 | `mtime` | `asc()`, `desc()` | Current files |
-| `content` | `is_(content_id)` | Current files |
-| `tags` | `all_of(*names, provenance=None)`, `any_of(*names, provenance=None)` | Current files |
+| `content` | `is_(content_id)` | Current files and catalog-wide content |
+| `tags` | `all_of(*names, provenance=None)`, `any_of(*names, provenance=None)` | Current files and catalog-wide content |
 | `duplicate` | `file_count.asc()`, `file_count.desc()`, `redundant_bytes.asc()`, `redundant_bytes.desc()` | Duplicate groups |
 | `tag_name` | `regex(source)`, `asc()`, `desc()` | Tag vocabulary |
 | `tag_usage` | `content_count.asc()/desc()`, `assertion_count.asc()/desc()` | Tag vocabulary |
@@ -328,6 +329,74 @@ The earlier `duplicate_groups()`, `search_duplicate_groups()`,
 were retired when this grouped query was introduced. The duplicate CLI uses
 this query directly.
 
+## Duplicate pagination
+
+`DuplicateGroupQuery.offset(count: int) -> Self` skips zero-based group positions
+before applying the group limit. The default offset is 0. Transformations are
+immutable: repeated `offset()` replaces the offset, and `offset(0)` resets it.
+Ordering, offset, and limit have the same semantics regardless of call order.
+
+```python
+query = catalog.duplicates(root)
+query.offset(10).limit(10).fetch()  # groups 11–20; positions [10, 20)
+query.offset(90).limit(10).fetch()  # groups 91–100; positions [90, 100)
+```
+
+Offsets require exact integers from 0 through `2**63 - 1`; booleans, floats,
+strings, and `None` raise `TypeError`, while negative/overflow values raise
+`ValueError`. Validation is eager. Group rows are ordered and paged in SQL;
+Python does not collect or iterate through skipped groups. Deep offsets may
+still require SQLite to aggregate, sort, and traverse earlier groups.
+
+`fetch()` and `stream()` honor the offset and group limit. `stream_all()` honors
+the offset but removes the group limit, yielding the remaining suffix. Use
+`offset(0).stream_all()` for every group. Offsets never affect member paths,
+member bounds, or complete per-group metrics. `summary()` ignores pagination.
+Offsets at or beyond the group count return empty pages; final pages can be partial.
+Existing ordering and full content-identity ascending tie-breakers are unchanged.
+
+Each fresh terminal resolves the latest successful scan (streams on first
+advancement). On an unchanged scan and ordering, adjacent pages have no overlap
+or omissions. Successful refreshes can shift positions, so sequential requests
+across refreshes can repeat or skip content identities. Failed/interrupted scans
+do not change the current state. A started stream and its handles retain their
+resolved scan, including member reads after refresh or outer-stream closure.
+Row numbers are temporary positions; full `ContentId` is identity.
+
+Avoid successful refreshes during a review requiring stable page positions.
+There is no pinned paging session, historical scan selector, or new snapshot API.
+CLI summaries and rows remain separate terminals and may describe different
+successful scans during a concurrent refresh. See the
+[CLI page contract](catalog-cli.md#duplicate-pages) and
+[executable pagination tutorial](../notebooks/public/plan-004.9-duplicate-pagination.ipynb).
+
+## Imports, validation, and detail result types
+
+Import query classes and domain/result records from `archiver`; import expression
+factories from `archiver.query`. Construct queries through `Catalog`, not private
+constructor arguments. Query transformations validate eagerly: wrong value types
+raise `TypeError`, unsupported values raise `ValueError`; numeric limits exclude
+`bool`. Invalid roots raise `ScanFailure` and malformed regexes retain `re.error`.
+All terminals require an open catalog; stream execution begins on first advancement.
+
+| Query class (`archiver`) | Materialized result |
+| --- | --- |
+| `CurrentFileQuery` | `tuple[FileObservation, ...]` |
+| `CurrentFileTagQuery` | `tuple[CurrentFileTagView, ...]` |
+| `DuplicateGroupQuery` | `tuple[DuplicateGroupView, ...]` |
+| `ContentQuery` | `tuple[ContentRecord, ...]` |
+| `ContentDetailQuery` | `tuple[ContentTagView, ...]` |
+| `TagVocabularyQuery` | `tuple[TagUsage, ...]` |
+
+All queries default to 20 parent rows/groups. Detail views retain their base
+query’s parent bound and expose `fetch()`; content details additionally expose
+`current_path_count() -> int`. Set transformations on the base before creating
+a view. The base keeps its original row type. `all_tags` requires a boolean;
+`True` removes only the per-content tag preview bound, never the parent bound.
+Numeric preview limits remain positive integers even when all tags are requested;
+`None` is rejected. Displayed tags span all active provenance regardless of matching
+provenance. Path previews are full relative POSIX paths ascending.
+
 ## File tag details
 
 `catalog.files(root).with_tags(limit=3)` returns a `CurrentFileTagQuery` whose
@@ -356,7 +425,9 @@ with active assertions. `where(tag_name.regex(source))` uses Python
 `re.search`; repeated regex predicates are ANDed. Provenance scopes both
 inclusion and usage counts. Sorting supports tag name, distinct-content usage,
 and assertion usage. `fetch()` defaults to 20 names and `count()` returns the
-complete matching-name count.
+complete matching-name count. `provenance(None)` resets to all producers; repeated
+`provenance()` calls replace that scope. Usage-order ties use name ascending,
+including descending primary order. Multiple regex filters use AND.
 
 ## Current boundary
 
@@ -365,6 +436,13 @@ modification-time ordering; positive limits; bounded fetching and streaming;
 explicit unbounded streaming; and complete count and size reductions. The
 duplicate grammar supports one fixed content grouping, typed group ordering,
 bounded fetch previews, bounded and explicit unbounded group/member streams,
-and a complete summary. It does not support duplicate predicates, configurable
-member ordering, OR or NOT composition, projection, arbitrary grouping,
-pagination, or historical-observation queries.
+group offsets, and a complete summary. It does not support duplicate predicates,
+configurable member ordering, OR or NOT composition, projection, arbitrary grouping,
+member pagination, keyset pagination, or historical-observation queries.
+
+## CLI mapping
+
+The [Catalog CLI reference](catalog-cli.md) records which public queries back each
+command, their display bounds and ordering, and preserved error behavior. The CLI
+uses typed query rows and explicit totals; it does not expose every library
+transformation or streaming terminal.

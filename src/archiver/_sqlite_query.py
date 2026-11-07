@@ -784,6 +784,9 @@ def compile_duplicate_groups(query: DuplicateGroupQueryDescription) -> SqliteQue
     direction = _ORDER_DIRECTIONS[query.ordering.direction]
     limit_clause = "" if query.group_limit is None else "LIMIT ?"
     limit_parameters: tuple[object, ...] = () if query.group_limit is None else (query.group_limit,)
+    if query.group_offset:
+        limit_clause = "LIMIT ? OFFSET ?"
+        limit_parameters = (-1 if query.group_limit is None else query.group_limit, query.group_offset)
     return SqliteQuery(
         statement=f"""
             SELECT

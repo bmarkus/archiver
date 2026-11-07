@@ -88,6 +88,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 arguments.root,
                 details=arguments.details,
                 group_limit=arguments.group_limit,
+                group_offset=arguments.group_offset,
                 member_limit=arguments.member_limit,
             )
         elif arguments.catalog_command == "files":
@@ -164,6 +165,13 @@ def _build_parser() -> argparse.ArgumentParser:
                 default=20,
                 metavar="N",
                 help="maximum groups to display (default: 20)",
+            )
+            subparser.add_argument(
+                "--group-offset",
+                type=_group_offset,
+                default=0,
+                metavar="N",
+                help="skip N ordered groups in details (default: 0); each page uses current state",
             )
             subparser.add_argument(
                 "--member-limit",
@@ -583,6 +591,7 @@ def _show_duplicate_summary(
     *,
     details: bool,
     group_limit: int,
+    group_offset: int,
     member_limit: int,
 ) -> None:
     root, database_path = _catalog_paths(root_argument)
@@ -592,12 +601,12 @@ def _show_duplicate_summary(
         if catalog.current_scan(root) is None:
             print("Current scan: none")
             return
-        query = catalog.duplicates(root).limit(group_limit).member_limit(member_limit)
+        query = catalog.duplicates(root).offset(group_offset).limit(group_limit).member_limit(member_limit)
         summary = query.summary()
         _print_duplicate_summary(summary)
         if not details:
             return
-        _print_duplicate_details(query.fetch(), summary)
+        _print_duplicate_details(query.fetch(), summary, group_offset=group_offset)
 
 
 def _show_files(
@@ -877,6 +886,13 @@ def _relative_path(value: str) -> PurePosixPath:
     return path
 
 
+def _group_offset(value: str) -> int:
+    parsed = int(value)
+    if not 0 <= parsed <= 2**63 - 1:
+        raise argparse.ArgumentTypeError("must be between 0 and 9223372036854775807")
+    return parsed
+
+
 def _positive_int(value: str) -> int:
     parsed = int(value)
     if parsed < 1:
@@ -936,18 +952,26 @@ def _print_duplicate_summary(summary: DuplicateSummary) -> None:
     print(f"Potential redundant bytes: {summary.potential_redundant_bytes}")
 
 
-def _print_duplicate_details(groups: Sequence[DuplicateGroupView], summary: DuplicateSummary) -> None:
+def _print_duplicate_details(
+    groups: Sequence[DuplicateGroupView], summary: DuplicateSummary, *, group_offset: int = 0
+) -> None:
     if not groups:
-        print("No duplicate groups.")
+        if group_offset:
+            print(f"No duplicate groups in the requested page (offset {group_offset}).")
+        else:
+            print("No duplicate groups.")
         return
     print("GROUP  SHA-256        COPIES  SIZE   POTENTIAL REDUNDANT  PATHS")
     print("-----  ------------   ------  -----  -------------------  -----")
-    for index, group in enumerate(groups, start=1):
+    for index, group in enumerate(groups, start=group_offset + 1):
         _print_duplicate_group(index, group)
     displayed = len(groups)
     total = summary.duplicate_content_group_count
-    qualifier = "all" if displayed == total else "first"
-    print(f"Showing {qualifier} {displayed} of {total} duplicate groups.")
+    if group_offset:
+        print(f"Showing groups {group_offset + 1}-{group_offset + displayed} of {total} duplicate groups.")
+    else:
+        qualifier = "all" if displayed == total else "first"
+        print(f"Showing {qualifier} {displayed} of {total} duplicate groups.")
 
 
 def _print_duplicate_group(index: int, group: DuplicateGroupView) -> None:

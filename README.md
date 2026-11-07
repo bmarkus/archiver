@@ -23,8 +23,9 @@ The first implementation phase established the catalog foundation: content ident
 
 Incremental design and implementation history is preserved in the [plan archive](docs/plans/README.md).
 
-The supported public grammar for current-file and duplicate queries is
-documented separately in the [query grammar](docs/query-grammar.md).
+The complete [Catalog API reference](docs/catalog-api.md) documents every public
+method and its signature. The [query grammar](docs/query-grammar.md) covers current
+files, duplicate groups, catalog-wide content, and active tag vocabulary.
 
 ## Catalog concepts
 
@@ -145,7 +146,8 @@ The shared `.gitattributes` records which files use the filter, but Git intentio
 
 ### Catalog CLI
 
-CLI for the archiver (explore on the shell)
+See the [Catalog CLI reference](docs/catalog-cli.md) for command/query mappings,
+limits, sorting, error codes, and examples.
 
 ```powershell
 uv run archiver catalog -h
@@ -174,6 +176,17 @@ Inspect duplicate groups with bounded member output:
 ```powershell
 uv run archiver catalog duplicates C:\path\to\root --details --group-limit 20 --member-limit 20
 ```
+
+Inspect groups 11–20 using a zero-based offset (member previews remain bounded):
+
+```powershell
+uv run archiver catalog duplicates C:\path\to\root --details --group-offset 10 --group-limit 10
+```
+
+In Python, use `catalog.duplicates(root).offset(10).limit(10).fetch()`.
+Each page uses current successful scan state; refreshes can shift positions.
+See [duplicate pagination](docs/query-grammar.md#duplicate-pagination) and its
+[public tutorial](notebooks/public/plan-004.9-duplicate-pagination.ipynb).
 
 Library callers can process every duplicate observation incrementally while
 keeping group/member previews bounded by default:

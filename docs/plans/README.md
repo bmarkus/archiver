@@ -2,8 +2,10 @@
 
 Plans record the evolution of Archiver's design and implementation.
 
-**Active plan:** None. [004.6 — Existing Read API Migration](004.6-existing-read-api-migration.md)
-is implemented. Do not begin 004.7 automatically.
+**Active plan:** None. [004.9 — Duplicate Pagination](004.9-duplicate-pagination.md)
+is implemented (2026-11-07), including API/CLI pagination and the public tutorial.
+Umbrella [004](004-query-grammar-and-api-refactor.md) is implemented pending review,
+including the 004.9 extension. No subsequent plan is active.
 
 **Implementation handoff (2026-09-30):** 004.4.1 and 004.5 are implemented and
 approved. The user also reviewed and approved the duplicate group streaming
@@ -53,7 +55,7 @@ subplans; this does not retroactively rewrite earlier implementation outcomes.
 | 003.3a | [Multi-Tag Content Search](003.3a-bounded-tag-query-apis.md) | Implemented (approved) | 003.3 | End-to-end bounded multi-tag content API and `tags find` CLI. |
 | 003.3b | [Tag-Aware Current-File Search](003.3b-tag-aware-file-and-content-cli.md) | Implemented (approved) | 003.3 | End-to-end tag-aware current-file API and compatible `catalog files` CLI. |
 | 003.3c | [Available Tag Vocabulary](003.3c-tag-vocabulary-cli.md) | Implemented (approved) | 003.3 | End-to-end active vocabulary usage API and `tags available` CLI. |
-| 004 | [Query Grammar and API Refactor](004-query-grammar-and-api-refactor.md) | Approved | - | Incremental typed query grammar and one compiled read-query architecture. |
+| 004 | [Query Grammar and API Refactor](004-query-grammar-and-api-refactor.md) | Implemented (pending review) | - | Incremental typed query grammar and one compiled read-query architecture. |
 | 004.1 | [Query Foundation](004.1-query-foundation.md) | Implemented (approved) | 004 | Minimal immutable query description, SQLite compilation, and execution boundary for `current_files()`. |
 | 004.2 | [Current Observation API](004.2-current-observation-api.md) | Implemented (approved) | 004 | Public bounded current-file query with typed path, sort, and limit expressions. |
 | 004.3 | [Materialization and Reductions](004.3-materialization-and-reductions.md) | Implemented (approved) | 004 | Current-file terminals, complete reductions, bounded streaming, and explicit unbounded streaming. |
@@ -65,5 +67,6 @@ subplans; this does not retroactively rewrite earlier implementation outcomes.
 | 004.6b | [Content Queries and Details](004.6b-content-queries-and-details.md) | Implemented | 004.6 | Catalog-wide content with root-scoped path previews. |
 | 004.6c | [Tag Vocabulary Queries](004.6c-tag-vocabulary-queries.md) | Implemented | 004.6 | Active vocabulary, usage counts and regex. |
 | 004.6d | [Retained Read Compilation](004.6d-retained-read-compilation.md) | Implemented | 004.6 | Shared internal execution for exact/history reads. |
-| 004.7 | [Public API Review and Cleanup](004.7-public-api-review-and-cleanup.md) | Prepared | 004 | Export, documentation and consumer audit. |
-| 004.8 | [CLI Consistency Audit](004.8-cli-consistency-audit.md) | Prepared | 004 | End-to-end CLI contract and umbrella completion audit. |
+| 004.7 | [Public API Review and Cleanup](004.7-public-api-review-and-cleanup.md) | Implemented | 004 | Public member/export audit, complete Catalog reference, and tutorial compatibility cleanup. |
+| 004.8 | [CLI Consistency Audit](004.8-cli-consistency-audit.md) | Implemented | 004 | CLI contract audit, integration coverage, CLI reference, and umbrella completion review. |
+| 004.9 | [Duplicate Pagination](004.9-duplicate-pagination.md) | Implemented | 004 | Immutable group offsets, bounded CLI pages, live refresh semantics, tests and documentation. |

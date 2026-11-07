@@ -465,6 +465,7 @@ class DuplicateGroupQuery:
     ordering: SortExpression = field(default_factory=lambda: duplicate.redundant_bytes.desc())
     group_limit: int = 20
     member_row_limit: int = 20
+    group_offset: int = 0
     _catalog: Catalog = field(repr=False, compare=False, kw_only=True)
 
     def __post_init__(self) -> None:
@@ -473,11 +474,17 @@ class DuplicateGroupQuery:
         _validate_duplicate_sort_expression(self.ordering)
         _validate_limit(self.group_limit)
         _validate_limit(self.member_row_limit)
+        _validate_offset(self.group_offset)
 
     def limit(self, count: int) -> Self:
         """Return a query with a replacement positive group bound."""
         _validate_limit(count)
         return replace(self, group_limit=count)
+
+    def offset(self, count: int) -> Self:
+        """Skip count ordered groups before applying the group limit."""
+        _validate_offset(count)
+        return replace(self, group_offset=count)
 
     def sort(self, ordering: SortExpression) -> Self:
         """Return a query with a replacement duplicate-group ordering."""
@@ -502,7 +509,7 @@ class DuplicateGroupQuery:
         return self._catalog._stream_duplicate_group_query(self, limit=self.group_limit)
 
     def stream_all(self) -> Iterator[DuplicateGroupHandle]:
-        """Yield every duplicate group without loading members."""
+        """Yield every group after the offset without loading members."""
         return self._catalog._stream_duplicate_group_query(self, limit=None)
 
 
@@ -659,6 +666,13 @@ def _validate_limit(count: object) -> None:
         raise TypeError("limit must be an integer")
     if count < 1:
         raise ValueError("limit must be at least 1")
+
+
+def _validate_offset(count: object) -> None:
+    if type(count) is not int:
+        raise TypeError("group offset must be an integer")
+    if not 0 <= count <= 2**63 - 1:
+        raise ValueError("group offset must be between 0 and 9223372036854775807")
 
 
 def _validate_all_tags(all_tags: object) -> None:

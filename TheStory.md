@@ -67,7 +67,7 @@ home.
 
 ## Introduce a typed query boundary
 
-The emerging structure is:
+The implemented structure is:
 
 ~~~text
 CLI and domain API
@@ -94,8 +94,10 @@ query grammar supplies the reusable transformations.
 
 ## The grammar available today
 
-Plans 004.1 through 004.4 established two focused query domains: current file
-observations and duplicate-content groups for one root.
+Plans 004.1 through 004.6 established four focused query domains: current file
+observations and duplicate-content groups for one root, catalog-wide content,
+and active tag vocabulary. Exact lookups, history iterators, lifecycle, and
+mutations remain ordinary `Catalog` methods.
 
 ~~~python
 from archiver.query import path, size
@@ -117,19 +119,27 @@ summary = catalog.duplicates(root).summary()
 
 This remains intentionally limited. Current-file queries support path GLOB
 filtering, deterministic ordering, bounded and streaming materialization, and
-complete reductions. Duplicate queries support fixed content grouping,
-bounded groups and members, and complete summaries. Queries are immutable and
-lazy: each transformation returns a new description, and terminals resolve the
-root's latest successful scan.
+complete reductions, exact content matching, and provenance-aware tag predicates.
+Duplicate queries support fixed content grouping, bounded previews, explicit
+group/member streams, and complete summaries. Content queries include identities
+without current paths; their detail roots only scope path previews. Vocabulary
+queries expose active names, provenance-scoped counts, and regex filters.
+Typed detail views preserve the base row type instead of switching it through
+optional output flags. Queries are immutable and lazy: each transformation
+returns a new description. Root-scoped observation terminals resolve the root’s
+latest successful scan; content and vocabulary terminals use catalog-wide state.
 
-The [query grammar](docs/query-grammar.md) is the public usage reference.
+The [Catalog API reference](docs/catalog-api.md) and
+[query grammar](docs/query-grammar.md) document the implemented public surface.
+Plan 004.7 audited exports and consumers against that surface, kept pandas
+adapters separate, and labeled earlier tutorials with their frozen revisions.
 [Plan 004](docs/plans/004-query-grammar-and-api-refactor.md) records the
 implementation sequence and architectural constraints.
 
 ## Why result shape matters
 
-The current grammar preserves the meaning of a row: it returns file
-observations. Some future catalog questions will have a different result shape.
+Each query domain preserves the meaning of its rows. Current-file queries return
+observations; content and vocabulary queries have different typed rows.
 
 For example, duplicate inspection groups observations by content identity. A
 duplicate-group result contains a content identity, copy count, aggregate byte
@@ -138,7 +148,7 @@ primary result. Its distinct typed result domain rejects operations that apply
 only to current-file rows.
 
 This is one reason the grammar is being added gradually. Grouping, aggregation,
-historical observations, tag predicates, and additional materialization
+historical observations, tag predicates, and materialization
 operations each need semantics that are specific enough to preserve the
 catalog's invariants. They are not just new SQL clauses.
 

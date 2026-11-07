@@ -13,6 +13,23 @@ Committed notebooks should have no saved outputs or execution counts. A clean
 execution validates that a notebook runs; it does not by itself mean that the
 notebook has been reviewed or approved.
 
+## Compatibility
+
+Current tutorials: refresh/reconciliation, Plan 004.2 through 004.6, and query/stream
+lifecycle, plus Plan 004.9 duplicate pagination. The Plan 004 query-grammar playground is a standalone conceptual model,
+not the production API. The catalog API and query grammar below are authoritative.
+
+Historical tutorials use retired APIs and require a separate frozen checkout:
+
+| Tutorials | Required revision |
+| --- | --- |
+| Plans 001, 003, 003.2, 003.3a–c, and 004 managed-operations motivation | `7082066b5c97ab18fc488f00b5c745b5f23478b1` (Phase 1) |
+| Plan 004.1 internal foundation | `c1f12d1` |
+
+Run `uv sync` and launch Jupyter from the matching checkout. Each historical
+notebook also carries this warning in its opening cell. Frozen tutorials preserve
+the teaching context of their original API; they are not current usage examples.
+
 ## Notebook guide
 
 | Notebook | Brief description |
@@ -33,11 +50,20 @@ notebook has been reviewed or approved.
 | [Plan 004.4.1 duplicate group streaming](plan-004.4.1-duplicate-group-streaming.ipynb) | Adds typed duplicate-group sorting and bounded or explicit unbounded group/member streaming with safe early closure. |
 | [Plan 004.5 tag and content predicates](plan-004.5-tag-and-content-predicates.ipynb) | Composes exact content and active-tag predicates across current-file queries using the implemented public grammar. |
 | [Plan 004.6 existing read API migration](plan-004.6-existing-read-api-migration.ipynb) | Covers current-file details, catalog-wide content details, active tag vocabulary, retained exact/history reads, and migrated CLI parity. |
+| [Plan 004.9 duplicate pagination](plan-004.9-duplicate-pagination.ipynb) | Fetches groups 11–20 and 91–100 through API/CLI, streams suffixes, and demonstrates refresh shifts and retained scan-pinned handles. |
 | [Catalog query and stream lifecycle](query-stream-lifecycle.ipynb) | Explains catalogs, reusable queries, lazy cursor-backed streams, independent group/member cursors, retained handles, scan pinning, and cleanup. |
 
-The current public API reference is [the query grammar](../../docs/query-grammar.md).
+Current references: [Catalog API](../../docs/catalog-api.md) and
+[query grammar](../../docs/query-grammar.md).
 Plan-specific notebooks link to their associated implementation plans from
 within the notebook where relevant.
+
+## Execution audit — 2026-11-07
+
+All 17 notebooks passed nbformat validation and clean-kernel execution. Current
+notebooks ran against current source; historical notebooks ran against their
+stated frozen revision. Output stripping was verified without retaining execution
+artifacts. This validation does not change the user-review records below.
 
 ## Status
 
@@ -65,3 +91,4 @@ record a notebook review. Validation and review are intentionally separate.
 | Plan 004.5 tag and content predicates | **Yes** | [Plan 004.5](../../docs/plans/004.5-tag-and-content-predicates.md) records review on 2026-09-29 and includes the notebook in its validated outcome. |
 | Plan 004.6 existing read API migration | No review record | This notebook is the post-implementation tutorial for Plans 004.6a–d; execution and validation are recorded in the implementation plan. |
 | Catalog query and stream lifecycle | **Yes — approved** | The user explicitly reviewed and approved this notebook on 2026-09-30; recorded in [Plan 004.4.1](../../docs/plans/004.4.1-duplicate-group-sorting-and-streaming.md#review-and-completion). |
+| Plan 004.9 duplicate pagination | No review record | All eight code cells passed clean-kernel execution, nbformat validation and output stripping on 2026-11-07; user review is not recorded. |

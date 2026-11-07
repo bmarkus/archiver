@@ -739,6 +739,7 @@ class Catalog:
             ordering=query.ordering,
             group_limit=group_limit,
             member_limit=query.member_row_limit,
+            group_offset=query.group_offset,
         )
 
     def current_scan(self, root: Path) -> ScanRun | None:

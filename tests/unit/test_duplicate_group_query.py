@@ -170,9 +170,10 @@ class _TrackingConnection:
         return self.cursor
 
 
-def test_duplicate_iterators_close_cursors_on_close_exhaustion_and_error(tmp_path: Path) -> None:
+@pytest.mark.parametrize("offset", [0, 1])
+def test_duplicate_iterators_close_cursors_on_close_exhaustion_and_error(tmp_path: Path, offset: int) -> None:
     location = Location(id=7, root=tmp_path)
-    query = DuplicateGroupQueryDescription(location, 11, size.asc(), None, None)
+    query = DuplicateGroupQueryDescription(location, 11, size.asc(), None, None, group_offset=offset)
 
     explicit_cursor = _TrackingCursor([cast(sqlite3.Row, object()), cast(sqlite3.Row, object())])
     explicit = iter_duplicate_group_rows(cast(sqlite3.Connection, _TrackingConnection(explicit_cursor)), query)
