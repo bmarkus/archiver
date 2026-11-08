@@ -15,3 +15,10 @@ Each plan records:
 
 Keep plans proportionate to the fix, but do not omit the evidence or validation
 criteria needed to review it safely.
+
+## Catalog review checkpoint — 2026-11-08
+
+Bug-fix plans 001–006 are implemented and reviewed at the user's request.
+See the [catalog-to-archive handoff](../plans/README.md#catalog-review-and-archive-handoff--2026-11-08)
+and annotated Git tag `catalog-reviewed-archive-ready`. Earlier reproduction,
+implementation, and validation records remain historical.

@@ -1,5 +1,13 @@
 # Plan 001 — Catalog Foundation
 
+**Status:** Implemented (reviewed).
+
+**Review checkpoint:** 2026-11-08 — Reviewed at the user's request for the
+catalog-to-archive handoff. Earlier dated implementation/review notes and
+checklists remain historical; this checkpoint supersedes earlier pending
+statuses and does not activate follow-on implementation. See the
+[handoff record](README.md#catalog-review-and-archive-handoff--2026-11-08).
+
 > Working assumption for this handoff: Plan 001 is the smallest useful catalog foundation: content hashing, local directory scanning, persistent observations in SQLite, and duplicate discovery. It deliberately excludes archive management, ingest, tags, and destructive operations.
 
 ## Goal

@@ -1,6 +1,12 @@
 # Bugfix 004 — Duplicate member indentation
 
-Status: Implemented and validated 2026-11-07.
+**Status:** Implemented (reviewed).
+
+**Review checkpoint:** 2026-11-08 — Reviewed at the user's request for the
+catalog-to-archive handoff. Earlier dated implementation/review notes and
+checklists remain historical; this checkpoint supersedes earlier pending
+statuses and does not activate follow-on implementation. See the
+[handoff record](../plans/README.md#catalog-review-and-archive-handoff--2026-11-08).
 
 ## Reproduction
 

@@ -1,6 +1,13 @@
 # Plan 004 — Query Grammar and API Refactor
 
-**Status:** Implemented pending review (2026-11-07)
+**Status:** Implemented (reviewed).
+
+**Review checkpoint:** 2026-11-08 — Reviewed at the user's request for the
+catalog-to-archive handoff. Earlier dated implementation/review notes and
+checklists remain historical; this checkpoint supersedes earlier pending
+statuses and does not activate follow-on implementation. See the
+[handoff record](README.md#catalog-review-and-archive-handoff--2026-11-08).
+
 **Related plans:** [001.1](001.1-streaming-history-query-apis.md), [001.5](001.5-bounded-current-file-browsing.md), [003](003-bounded-duplicate-inspection.md), [003.2](003.2-content-level-tags.md), [003.3](003.3-bounded-tag-and-file-search.md)  
 **Sequence:** 004  
 **Created:** 2026-09-03  
