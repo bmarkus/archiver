@@ -45,7 +45,10 @@ def test_reconciliation_is_write_free_reuses_metadata_and_persists_metadata_only
         assert current.mtime_ns == original.mtime_ns + 1_000_000_000
 
 
-def test_reconciliation_reports_new_modified_missing_and_rejects_stale_apply(tmp_path: Path) -> None:
+@pytest.mark.parametrize("verify_hashes", [False, True])
+def test_reconciliation_reports_new_modified_missing_and_rejects_stale_apply(
+    tmp_path: Path, verify_hashes: bool
+) -> None:
     root = tmp_path / "source"
     root.mkdir()
     retained = root / "retained.txt"
@@ -55,11 +58,11 @@ def test_reconciliation_reports_new_modified_missing_and_rejects_stale_apply(tmp
     changed.write_bytes(b"first")
     removed.write_bytes(b"gone")
     with Catalog.create(tmp_path / "catalog.sqlite") as catalog:
-        catalog.scan_directory(root)
+        catalog.scan_directory(root, verify_hashes=verify_hashes)
         removed.unlink()
         changed.write_bytes(b"second")
         (root / "new.txt").write_bytes(b"new")
-        changes = catalog.reconcile_directory(root)
+        changes = catalog.reconcile_directory(root, verify_hashes=verify_hashes)
         assert [(change.relative_path.as_posix(), change.kind) for change in changes.changes] == [
             ("changed.txt", "modified"),
             ("new.txt", "new"),
@@ -67,20 +70,23 @@ def test_reconciliation_reports_new_modified_missing_and_rejects_stale_apply(tmp
             ("retained.txt", "unchanged"),
         ]
 
-        catalog.scan_directory(root)
+        catalog.scan_directory(root, verify_hashes=verify_hashes)
         with pytest.raises(StaleRefreshError, match="no longer matches"):
             catalog.apply_refresh(changes)
 
 
+@pytest.mark.parametrize("verify_hashes", [False, True])
 def test_detectable_hash_failure_returns_no_change_set_and_preserves_current_state(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    verify_hashes: bool,
 ) -> None:
     root = tmp_path / "source"
     root.mkdir()
     entry = root / "entry.txt"
     entry.write_bytes(b"first")
     with Catalog.create(tmp_path / "catalog.sqlite") as catalog:
-        catalog.scan_directory(root)
+        catalog.scan_directory(root, verify_hashes=verify_hashes)
         before = list(catalog.files(root).stream_all())
         entry.write_bytes(b"second")
 
@@ -89,5 +95,5 @@ def test_detectable_hash_failure_returns_no_change_set_and_preserves_current_sta
 
         monkeypatch.setattr("archiver.catalog.hash_file_stably", changed_during_hash)
         with pytest.raises(RefreshFailure, match="reconciliation failed"):
-            catalog.reconcile_directory(root)
+            catalog.reconcile_directory(root, verify_hashes=verify_hashes)
         assert list(catalog.files(root).stream_all()) == before

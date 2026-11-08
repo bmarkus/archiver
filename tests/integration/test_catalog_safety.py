@@ -8,7 +8,8 @@ import pytest
 from archiver import Catalog, InvalidCatalogError
 
 
-def test_directory_symlinks_are_not_traversed(tmp_path: Path) -> None:
+@pytest.mark.parametrize("verify_hashes", [False, True])
+def test_directory_symlinks_are_not_traversed(tmp_path: Path, verify_hashes: bool) -> None:
     root = tmp_path / "source"
     inside = root / "inside"
     outside = tmp_path / "outside"
@@ -24,7 +25,7 @@ def test_directory_symlinks_are_not_traversed(tmp_path: Path) -> None:
         pytest.skip("directory symlinks are not available on this platform")
 
     with Catalog.create(tmp_path / "catalog.sqlite") as catalog:
-        catalog.scan_directory(root)
+        catalog.scan_directory(root, verify_hashes=verify_hashes)
 
         assert [item.relative_path.as_posix() for item in catalog.files(root).stream_all()] == ["inside/visible.txt"]
     assert inside_file.read_bytes() == b"inside"

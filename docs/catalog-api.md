@@ -110,18 +110,18 @@ Canonical absolute path of the SQLite database.
 ### `scan_directory`
 
 ```python
-scan_directory(root: Path, *, excluded_directories: Collection[Path]=(), progress_callback: Callable[[ScanProgress], None] | None=None) -> ScanSummary
+scan_directory(root: Path, *, verify_hashes: bool=False, excluded_directories: Collection[Path]=(), progress_callback: Callable[[ScanProgress], None] | None=None) -> ScanSummary
 ```
 
-Reconcile the source and atomically apply its observations. Return the new successful scan summary; source files remain unchanged. Exclusions are directory paths, and the optional callback receives completed-file progress.
+Reconcile the source and atomically apply its observations. Return the new successful scan summary; source files remain unchanged. Exclusions are directory paths, and the optional callback receives completed-file progress (observed sizes, not bytes physically read). Default refresh reuses matching metadata; `verify_hashes=True` hashes every included regular file. Both modes preserve exclusions, symlink rules, and failure atomicity.
 
 ### `reconcile_directory`
 
 ```python
-reconcile_directory(root: Path, *, excluded_directories: Collection[Path]=(), progress_callback: Callable[[ScanProgress], None] | None=None) -> RefreshChangeSet
+reconcile_directory(root: Path, *, verify_hashes: bool=False, excluded_directories: Collection[Path]=(), progress_callback: Callable[[ScanProgress], None] | None=None) -> RefreshChangeSet
 ```
 
-Read the filesystem and compare it with current observations without writing catalog state. Return a deterministic change set with a catalog baseline. May reuse hashes when metadata is unchanged; the baseline does not lock filesystem bytes.
+Read the filesystem and compare it with current observations without writing catalog state. Return a deterministic change set with a catalog baseline. By default, matching relative path, size, and nanosecond mtime reuse the cached SHA-256 identity. This is a cache heuristic: a same-size rewrite with restored mtime can be missed. Pass `verify_hashes=True` to read and SHA-256 hash every included regular file, including duplicate copies. Fresh identities determine unchanged/modified classification; unchanged verified files have `hash_reused=False`. The baseline does not lock filesystem bytes.
 
 ### `apply_refresh`
 
@@ -130,6 +130,15 @@ apply_refresh(change_set: RefreshChangeSet) -> ScanSummary
 ```
 
 Atomically publish a reconciled change set after checking its catalog baseline. Return the successful scan summary; a stale baseline raises `StaleRefreshError`. Does not reread or mutate source files.
+
+Full verification records bytes observed during reconciliation. Application does not reread them, and later filesystem changes remain possible. No verification timestamp is persisted.
+
+Reconciliation changes use deterministic depth-first POSIX path-component order:
+`bundle/file.txt` precedes `bundle.zip`. The baseline and filesystem traversal
+use this same order to classify each path once. Public query path sorting
+continues to order complete relative-path strings.
+
+Future archive ingestion must independently verify the destination bytes with SHA-256 against the expected identity before accepting a managed copy, even if the source catalog already has a hash or was fully verified. Archive ingestion is not implemented here; see [Plan 002.2](plans/002.2-refresh-hash-verification.md).
 
 ## Query entry points
 

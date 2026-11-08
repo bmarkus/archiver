@@ -182,6 +182,13 @@ _BASE_SCHEMA_TABLES = frozenset({"catalog_metadata", "locations", "content", "sc
 _TAG_SCHEMA_TABLES = frozenset({"tags", "content_tag_assertions"})
 
 
+def _compare_relative_path_components(left: str, right: str) -> int:
+    """Match depth-first traversal and PurePosixPath merge comparisons."""
+    left_parts = PurePosixPath(left).parts
+    right_parts = PurePosixPath(right).parts
+    return (left_parts > right_parts) - (left_parts < right_parts)
+
+
 def _validate_schema_tables(connection: sqlite3.Connection, version: int) -> None:
     rows = connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
     actual = {str(row[0]) for row in rows}
@@ -198,6 +205,7 @@ class Catalog:
         self._database_path = database_path.resolve(strict=False)
         self._connection = connection
         self._connection.row_factory = sqlite3.Row
+        self._connection.create_collation("archiver_path_components", _compare_relative_path_components)
         self._connection.execute("PRAGMA foreign_keys = ON")
 
     @classmethod
@@ -331,12 +339,14 @@ class Catalog:
         self,
         root: Path,
         *,
+        verify_hashes: bool = False,
         excluded_directories: Collection[Path] = (),
         progress_callback: Callable[[ScanProgress], None] | None = None,
     ) -> ScanSummary:
-        """Reconcile a directory then atomically apply its successful observations."""
+        """Reconcile and apply observations, optionally hashing every included file."""
         change_set = self.reconcile_directory(
             root,
+            verify_hashes=verify_hashes,
             excluded_directories=excluded_directories,
             progress_callback=progress_callback,
         )
@@ -346,6 +356,7 @@ class Catalog:
         self,
         root: Path,
         *,
+        verify_hashes: bool = False,
         excluded_directories: Collection[Path] = (),
         progress_callback: Callable[[ScanProgress], None] | None = None,
     ) -> RefreshChangeSet:
@@ -354,6 +365,8 @@ class Catalog:
         Its baseline identifies the catalog-current scan used for comparison. It
         does not lock the filesystem; observations can become stale after this
         method returns and before a caller applies the returned change set.
+        Matching path, size, and mtime normally reuse a cached identity. Set
+        verify_hashes to read and SHA-256 hash every included regular file.
         """
         canonical_root = self._canonical_root(root)
         existing_location = self._location_for_root(canonical_root)
@@ -370,6 +383,8 @@ class Catalog:
         total_bytes_observed = 0
 
         try:
+            # Both streams must use component order, not complete path-string
+            # order: a directory's descendants precede a sibling like dir.zip.
             for path in regular_files(canonical_root, excluded_directories):
                 if self._is_catalog_file(path):
                     continue
@@ -379,7 +394,9 @@ class Catalog:
                     previous = next(previous_observations, None)
 
                 if previous is not None and previous.relative_path == relative_path:
-                    current, hash_reused = self._reconcile_existing_path(path, location, previous)
+                    current, hash_reused = self._reconcile_existing_path(
+                        path, location, previous, verify_hashes=verify_hashes
+                    )
                     kind: RefreshChangeKind = "unchanged" if current.content_id == previous.content_id else "modified"
                     changes.append(RefreshChange(kind, relative_path, previous, current, hash_reused))
                     previous = next(previous_observations, None)
@@ -851,12 +868,12 @@ class Catalog:
         )
 
     def _reconcile_existing_path(
-        self, path: Path, location: Location, previous: FileObservation
+        self, path: Path, location: Location, previous: FileObservation, *, verify_hashes: bool
     ) -> tuple[FileObservation, bool]:
         if path.is_symlink() or not path.is_file():
             raise RefreshFailure(f"file changed type during reconciliation: {path}")
         metadata = path.stat()
-        if metadata.st_size == previous.size_bytes and metadata.st_mtime_ns == previous.mtime_ns:
+        if not verify_hashes and metadata.st_size == previous.size_bytes and metadata.st_mtime_ns == previous.mtime_ns:
             return (
                 FileObservation(
                     location=location,
@@ -909,7 +926,7 @@ class Catalog:
         return execute_scan_summary(self._connection, scan_id)
 
     def _current_observation_iterator(self, location: Location) -> Iterator[FileObservation]:
-        """Stream one location's current observations in relative-path order."""
+        """Stream current observations in the traversal's POSIX component order."""
         assert location.id is not None
         cursor = self._connection.execute(
             """
@@ -919,7 +936,7 @@ class Catalog:
             JOIN content ON content.id = observations.content_id
             JOIN locations ON locations.current_scan_id = observations.scan_id
             WHERE locations.id = ?
-            ORDER BY observations.relative_path
+            ORDER BY observations.relative_path COLLATE archiver_path_components
             """,
             (location.id,),
         )

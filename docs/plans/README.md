@@ -2,10 +2,21 @@
 
 Plans record the evolution of Archiver's design and implementation.
 
-**Active plan:** None. [004.9 — Duplicate Pagination](004.9-duplicate-pagination.md)
+**Active plan:** None.
+[Bugfix 006 — Reconciliation path ordering](../bugfixes/006-reconciliation-path-ordering.md)
+is implemented and validated (2026-11-08).
+[002.2 — Refresh Hash Verification](002.2-refresh-hash-verification.md)
+is implemented (2026-11-08), including API/CLI verification, tests, and documentation.
+[004.9 — Duplicate Pagination](004.9-duplicate-pagination.md)
 is implemented (2026-11-07), including API/CLI pagination and the public tutorial.
 Umbrella [004](004-query-grammar-and-api-refactor.md) is implemented pending review,
-including the 004.9 extension. No subsequent plan is active.
+including the 004.9 extension.
+
+**Implemented (2026-11-08):** [002.2 — Refresh Hash Verification](002.2-refresh-hash-verification.md)
+adds an explicit full-verification mode while preserving incremental refresh,
+and records mandatory verification for future archive ingestion. All acceptance
+criteria and completion checks passed. Plan 005 is reserved for archive work;
+no subsequent plan is active.
 
 **Implementation handoff (2026-09-30):** 004.4.1 and 004.5 are implemented and
 approved. The user also reviewed and approved the duplicate group streaming
@@ -48,6 +59,7 @@ subplans; this does not retroactively rewrite earlier implementation outcomes.
 | 001.5 | [Bounded Current-File Browsing](001.5-bounded-current-file-browsing.md) | Implemented (approved) | 001 | Bounded, sortable current-file exploration with aggregate matched size. |
 | 002 | [Catalog Refresh and Reconciliation](002-catalog-refresh-and-reconciliation.md) | Implemented (approved) | 001 | Read-only filesystem reconciliation with typed changes and atomic snapshot application. |
 | 002.1 | [Refresh CLI Preview and Application](002.1-refresh-cli-preview-and-application.md) | Implemented (approved) | 002 | Dry-run reconciliation previews, detailed path reporting, and compatible refresh commands. |
+| 002.2 | [Refresh Hash Verification](002.2-refresh-hash-verification.md) | Implemented | 002 | Incremental refresh defaults, explicit full SHA-256 verification, and a mandatory future-ingestion verification contract. |
 | 003 | [Bounded Duplicate Inspection](003-bounded-duplicate-inspection.md) | Implemented (approved) | 001 | Bounded duplicate-group and member inspection with complete aggregate metrics. |
 | 003.1 | [Catalog Safety and Boundary Test Expansion](003.1-catalog-safety-and-boundary-tests.md) | Implemented (approved) | 003 | Regression coverage for transactional, persistence, filesystem, hashing, location, refresh, and CLI safety boundaries. |
 | 003.2 | [Content-Level Tags](003.2-content-level-tags.md) | Implemented (approved) | 003 | Provenance-aware content tags, explicit schema migration, and bounded tag queries. |

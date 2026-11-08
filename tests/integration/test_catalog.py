@@ -147,7 +147,8 @@ def test_changed_path_points_to_new_content_after_a_later_scan(tmp_path: Path) -
     assert catalog.files(source).first().content_id != first_content  # type: ignore[union-attr]
 
 
-def test_symlinks_are_not_followed(tmp_path: Path) -> None:
+@pytest.mark.parametrize("verify_hashes", [False, True])
+def test_symlinks_are_not_followed(tmp_path: Path, verify_hashes: bool) -> None:
     source = tmp_path / "source"
     source.mkdir()
     target = tmp_path / "target.txt"
@@ -159,7 +160,7 @@ def test_symlinks_are_not_followed(tmp_path: Path) -> None:
         pytest.skip("symlinks are not available on this platform")
     catalog = Catalog.create(tmp_path / "catalog.sqlite")
 
-    catalog.scan_directory(source)
+    catalog.scan_directory(source, verify_hashes=verify_hashes)
 
     assert list(catalog.files(source).stream_all()) == []
 
@@ -184,14 +185,15 @@ def test_failed_scan_preserves_previous_current_state(tmp_path: Path, monkeypatc
     assert list(catalog.files(source).stream_all()) == expected
 
 
-def test_catalog_database_and_sidecars_are_excluded_when_inside_root(tmp_path: Path) -> None:
+@pytest.mark.parametrize("verify_hashes", [False, True])
+def test_catalog_database_and_sidecars_are_excluded_when_inside_root(tmp_path: Path, verify_hashes: bool) -> None:
     source = tmp_path / "source"
     source.mkdir()
     (source / "entry.txt").write_bytes(b"source data")
     database_path = source / "catalog.sqlite"
     catalog = Catalog.create(database_path)
 
-    catalog.scan_directory(source)
+    catalog.scan_directory(source, verify_hashes=verify_hashes)
 
     assert [item.relative_path.as_posix() for item in catalog.files(source).stream_all()] == ["entry.txt"]
 
@@ -350,15 +352,18 @@ def test_scan_progress_reports_persisted_completed_work_and_posix_paths(tmp_path
     ]
 
 
+@pytest.mark.parametrize("verify_hashes", [False, True])
 def test_progress_callback_failure_preserves_previous_current_state(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    verify_hashes: bool,
 ) -> None:
     source = tmp_path / "source"
     source.mkdir()
     file_path = source / "entry.txt"
     file_path.write_bytes(b"first")
     catalog = Catalog.create(tmp_path / "catalog.sqlite")
-    catalog.scan_directory(source)
+    catalog.scan_directory(source, verify_hashes=verify_hashes)
     expected = list(catalog.files(source).stream_all())
     file_path.write_bytes(b"second")
 
@@ -366,12 +371,13 @@ def test_progress_callback_failure_preserves_previous_current_state(
         raise RuntimeError("controlled callback failure")
 
     with pytest.raises(ScanFailure, match="reconciliation failed"):
-        catalog.scan_directory(source, progress_callback=fail_progress)
+        catalog.scan_directory(source, verify_hashes=verify_hashes, progress_callback=fail_progress)
 
     assert list(catalog.files(source).stream_all()) == expected
 
 
-def test_progress_excludes_control_directory_and_preserves_source(tmp_path: Path) -> None:
+@pytest.mark.parametrize("verify_hashes", [False, True])
+def test_progress_excludes_control_directory_and_preserves_source(tmp_path: Path, verify_hashes: bool) -> None:
     source = tmp_path / "source"
     source.mkdir()
     visible = source / "entry.txt"
@@ -382,7 +388,9 @@ def test_progress_excludes_control_directory_and_preserves_source(tmp_path: Path
     catalog = Catalog.create(tmp_path / "catalog.sqlite")
     progress: list[ScanProgress] = []
 
-    catalog.scan_directory(source, excluded_directories=(excluded,), progress_callback=progress.append)
+    catalog.scan_directory(
+        source, verify_hashes=verify_hashes, excluded_directories=(excluded,), progress_callback=progress.append
+    )
 
     assert [item.current_relative_path.as_posix() for item in progress] == ["entry.txt"]
     assert visible.read_bytes() == b"source"

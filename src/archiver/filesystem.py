@@ -5,7 +5,11 @@ from pathlib import Path
 
 
 def regular_files(root: Path, excluded_directories: Collection[Path]) -> Iterator[Path]:
-    """Yield regular files recursively, sorting only each directory's entries."""
+    """Yield files in POSIX component order, sorting only each directory's entries.
+
+    Depth-first traversal places ``dir/file`` before the sibling ``dir.zip``;
+    callers merging a second stream must use the same component ordering.
+    """
     excluded = frozenset(directory.resolve(strict=False) for directory in excluded_directories)
     yield from _regular_files(root, excluded)
 

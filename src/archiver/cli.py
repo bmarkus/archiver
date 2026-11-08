@@ -78,6 +78,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif arguments.catalog_command in ("refresh", "scan"):
             _refresh_catalog(
                 arguments.root,
+                verify_hashes=arguments.verify_hashes,
                 dry_run=arguments.dry_run,
                 details=arguments.details,
                 no_progress=arguments.no_progress,
@@ -139,6 +140,11 @@ def _build_parser() -> argparse.ArgumentParser:
         subparser = catalog_commands.add_parser(command, help=help_text)
         subparser.add_argument("root", type=Path, metavar="ROOT")
         if command in ("refresh", "scan"):
+            subparser.add_argument(
+                "--verify-hashes",
+                action="store_true",
+                help="read and SHA-256 hash all included files instead of reusing hashes for matching size/mtime",
+            )
             subparser.add_argument(
                 "--dry-run",
                 action="store_true",
@@ -554,6 +560,7 @@ def _show_catalog_info(root_argument: Path) -> None:
 def _refresh_catalog(
     root_argument: Path,
     *,
+    verify_hashes: bool,
     dry_run: bool,
     details: str | None,
     no_progress: bool,
@@ -567,6 +574,7 @@ def _refresh_catalog(
         try:
             change_set = catalog.reconcile_directory(
                 root,
+                verify_hashes=verify_hashes,
                 excluded_directories=(root / _CONTROL_DIRECTORY_NAME,),
                 progress_callback=None if renderer is None else renderer.render,
             )

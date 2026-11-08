@@ -25,21 +25,22 @@ def _table_counts(database_path: Path) -> dict[str, int]:
         connection.close()
 
 
-def test_apply_refresh_rolls_back_after_late_duplicate_path_failure(tmp_path: Path) -> None:
+@pytest.mark.parametrize("verify_hashes", [False, True])
+def test_apply_refresh_rolls_back_after_late_duplicate_path_failure(tmp_path: Path, verify_hashes: bool) -> None:
     root = tmp_path / "source"
     root.mkdir()
     (root / "seed.txt").write_bytes(b"seed")
     database_path = tmp_path / "catalog.sqlite"
 
     with Catalog.create(database_path) as catalog:
-        catalog.scan_directory(root)
+        catalog.scan_directory(root, verify_hashes=verify_hashes)
         expected_current = list(catalog.files(root).stream_all())
         expected_scans = list(catalog.scan_history())
         expected_history = list(catalog.observation_history())
         expected_counts = _table_counts(database_path)
         (root / "a-first.txt").write_bytes(b"first")
         (root / "b-second.txt").write_bytes(b"second")
-        change_set = catalog.reconcile_directory(root)
+        change_set = catalog.reconcile_directory(root, verify_hashes=verify_hashes)
         first = next(change for change in change_set.changes if change.relative_path.as_posix() == "a-first.txt")
         assert first.current is not None
 
@@ -69,21 +70,22 @@ def test_apply_refresh_rolls_back_after_late_duplicate_path_failure(tmp_path: Pa
         assert _table_counts(database_path) == expected_counts
 
 
-def test_apply_refresh_rolls_back_contradictory_content_size(tmp_path: Path) -> None:
+@pytest.mark.parametrize("verify_hashes", [False, True])
+def test_apply_refresh_rolls_back_contradictory_content_size(tmp_path: Path, verify_hashes: bool) -> None:
     root = tmp_path / "source"
     root.mkdir()
     (root / "seed.txt").write_bytes(b"seed")
     database_path = tmp_path / "catalog.sqlite"
 
     with Catalog.create(database_path) as catalog:
-        catalog.scan_directory(root)
+        catalog.scan_directory(root, verify_hashes=verify_hashes)
         seed = catalog.files(root).first()
         assert seed is not None
         expected_current = list(catalog.files(root).stream_all())
         expected_counts = _table_counts(database_path)
         (root / "a-first.txt").write_bytes(b"first")
         (root / "z-conflict.txt").write_bytes(b"conflict")
-        change_set = catalog.reconcile_directory(root)
+        change_set = catalog.reconcile_directory(root, verify_hashes=verify_hashes)
 
         forged_changes = []
         for change in change_set.changes:
@@ -114,17 +116,18 @@ def test_apply_refresh_rolls_back_contradictory_content_size(tmp_path: Path) -> 
         assert _table_counts(database_path) == expected_counts
 
 
-def test_stale_refresh_application_creates_no_rows(tmp_path: Path) -> None:
+@pytest.mark.parametrize("verify_hashes", [False, True])
+def test_stale_refresh_application_creates_no_rows(tmp_path: Path, verify_hashes: bool) -> None:
     root = tmp_path / "source"
     root.mkdir()
     (root / "entry.txt").write_bytes(b"contents")
     database_path = tmp_path / "catalog.sqlite"
 
     with Catalog.create(database_path) as catalog:
-        first_change_set = catalog.reconcile_directory(root)
+        first_change_set = catalog.reconcile_directory(root, verify_hashes=verify_hashes)
         catalog.apply_refresh(first_change_set)
-        stale_change_set = catalog.reconcile_directory(root)
-        catalog.scan_directory(root)
+        stale_change_set = catalog.reconcile_directory(root, verify_hashes=verify_hashes)
+        catalog.scan_directory(root, verify_hashes=verify_hashes)
         expected_current = list(catalog.files(root).stream_all())
         expected_scans = list(catalog.scan_history())
         expected_history = list(catalog.observation_history())
@@ -139,14 +142,17 @@ def test_stale_refresh_application_creates_no_rows(tmp_path: Path) -> None:
         assert _table_counts(database_path) == expected_counts
 
 
-def test_apply_refresh_persists_captured_snapshot_then_detects_later_source_change(tmp_path: Path) -> None:
+@pytest.mark.parametrize("verify_hashes", [False, True])
+def test_apply_refresh_persists_captured_snapshot_then_detects_later_source_change(
+    tmp_path: Path, verify_hashes: bool
+) -> None:
     root = tmp_path / "source"
     root.mkdir()
     entry = root / "entry.txt"
     entry.write_bytes(b"before")
 
     with Catalog.create(tmp_path / "catalog.sqlite") as catalog:
-        change_set = catalog.reconcile_directory(root)
+        change_set = catalog.reconcile_directory(root, verify_hashes=verify_hashes)
         entry.write_bytes(b"after")
         catalog.apply_refresh(change_set)
 
@@ -155,7 +161,7 @@ def test_apply_refresh_persists_captured_snapshot_then_detects_later_source_chan
         assert current[0].content_id.digest == sha256(b"before").hexdigest()
         assert current[0].size_bytes == len(b"before")
 
-        later_change_set = catalog.reconcile_directory(root)
+        later_change_set = catalog.reconcile_directory(root, verify_hashes=verify_hashes)
         assert [(change.relative_path.as_posix(), change.kind) for change in later_change_set.changes] == [
             ("entry.txt", "modified")
         ]

@@ -127,6 +127,20 @@ applies observations; `catalog scan ROOT` remains its compatibility alias.
 `--dry-run` previews changes without writing catalog state. Refresh details
 accept `--details changes|all`; `--no-progress` suppresses interactive progress.
 
+Both commands accept `--verify-hashes` to read and SHA-256 hash every included
+regular file. Without it, matching relative path, size, and nanosecond mtime
+reuse the cached identity; a same-size rewrite with restored mtime can be missed.
+Verification also works with `--dry-run`, which remains write-free.
+`--details all` labels unchanged verified files `(hash rechecked)`. Progress
+continues counting completed files and observed sizes, not bytes physically read.
+Read failures return 1 and preserve the previous successful catalog state.
+Verification observes the files during reconciliation; application does not
+reread them or guarantee they remain unchanged afterward.
+
+Refresh detail rows follow deterministic depth-first path-component order
+(`bundle/file.txt` before `bundle.zip`). This differs from the complete
+relative-path string ordering used by file queries.
+
 `catalog tags add|remove|list ROOT` takes exactly one of `--path POSIX_PATH` and
 `--content SHA256`. Add/remove also require a tag name. The CLI creates user
 assertions; removal retracts user assertions while retaining system assertions
@@ -146,6 +160,7 @@ before inspecting its current observations:
 ```powershell
 uv run archiver catalog init C:\path\to\root
 uv run archiver catalog refresh C:\path\to\root --no-progress
+uv run archiver catalog refresh C:\path\to\root --verify-hashes --dry-run --details all
 uv run archiver catalog files C:\path\to\root --path "*.txt" --sort size --limit 10
 uv run archiver catalog duplicates C:\path\to\root --details --group-limit 5 --member-limit 3
 uv run archiver catalog tags add C:\path\to\root favorite --path photos/example.jpg

@@ -169,6 +169,7 @@ Preview reconciliation without changing the catalog:
 
 ```powershell
 uv run archiver catalog refresh C:\path\to\root --dry-run --details changes
+uv run archiver catalog refresh C:\path\to\root --verify-hashes --details all
 ```
 
 Inspect a table of duplicate groups without filenames (20 groups by default):
@@ -275,3 +276,5 @@ If an implementation plan conflicts with a documented invariant, the conflict sh
 ## License
 
 Archiver is licensed under the [MIT License](LICENSE).
+
+Routine refreshes reuse SHA-256 identities when relative path, size, and nanosecond mtime match. Use `catalog.scan_directory(root, verify_hashes=True)` or CLI `--verify-hashes` to hash every included file and detect same-size changes with restored timestamps. Verification remains read-only and supports dry-run reconciliation. Future archive ingestion must verify the copied destination bytes independently, even when the source catalog has a hash; archive ingestion remains future work.

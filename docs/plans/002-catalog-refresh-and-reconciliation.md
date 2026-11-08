@@ -36,3 +36,18 @@ Added coverage for write-free initial reconciliation, metadata-cache reuse, meta
 - `uv run ruff format --check .`: passed
 - `uv run mypy src tests`: passed
 - `git diff --check`: passed
+## Follow-up — 2026-11-08
+
+[Plan 002.2 — Refresh Hash Verification](002.2-refresh-hash-verification.md)
+extends both reconciliation and the scan convenience wrapper with optional full
+SHA-256 verification. Matching-metadata reuse remains the default; callers may
+bypass it with `verify_hashes=True`. The original implementation outcome above
+is preserved.
+
+## Ordering correction — 2026-11-08
+
+[Bugfix 006](../bugfixes/006-reconciliation-path-ordering.md) makes the baseline
+query agree with depth-first traversal and `PurePosixPath` merge comparisons:
+reconciliation uses POSIX component order, not complete path-string order.
+This corrects false new/missing classifications for a directory beside a
+similarly named ZIP file. Public read-query ordering and schema are unchanged.
