@@ -157,3 +157,13 @@ Plan 001 establishes only the foundation needed to:
 - identify duplicate content.
 
 Archive management, ingest, tags, merge policy, destructive duplicate resolution, and working-copy management come later.
+
+## Explicit history retention — 2026-11-08
+
+Plan 002.3 permits user-requested removal of old scan events and their historical
+file observations. This maintenance preserves the current successful snapshot,
+content identities, and all tag assertions/retractions/provenance. Every retained
+observation still belongs to its original scan; IDs are not renumbered or merged.
+Retention does not mutate observed files, imply archive authority, or run
+automatically during scanning. It removes historical path evidence, not content
+identity or tag history.

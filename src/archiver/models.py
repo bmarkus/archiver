@@ -193,6 +193,32 @@ class HistoricalObservation:
 
 
 @dataclass(frozen=True, slots=True)
+class ScanHistorySummary:
+    """Persisted observation totals for one scan; incomplete scans are partial."""
+
+    scan: ScanRun
+    files_observed: int
+    total_bytes_observed: int
+    is_current: bool
+
+
+@dataclass(frozen=True, slots=True)
+class PruneHistorySummary:
+    """Exact candidate counts, proposed in a preview or deleted on application."""
+
+    root: Path
+    keep_last: int
+    dry_run: bool
+    include_failed: bool
+    successful_scans_retained: int
+    oldest_retained_scan_id: int | None
+    scans_to_remove: int
+    observations_to_remove: int
+    successful_scans_to_remove: int
+    failed_scans_to_remove: int
+
+
+@dataclass(frozen=True, slots=True)
 class ScanSummary:
     """Counts describing a completed scan."""
 

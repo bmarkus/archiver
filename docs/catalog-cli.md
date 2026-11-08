@@ -174,3 +174,43 @@ For runnable disposable examples, see the
 and [refresh tutorial](../notebooks/public/catalog-refresh-and-reconciliation.ipynb).
 For library methods and migration, see the [Catalog API reference](catalog-api.md)
 and [query grammar](query-grammar.md).
+
+## Scan history and explicit pruning
+
+```powershell
+uv run archiver catalog history C:\path\to\root --limit 20
+uv run archiver catalog prune-history C:\path\to\root --keep-last 3
+uv run archiver catalog prune-history C:\path\to\root --keep-last 3 --include-failed
+uv run archiver catalog prune-history C:\path\to\root --keep-last 3 --include-failed --apply
+```
+
+`history` lists newest scan IDs first, default 20 rows. It shows status, a `*`
+current marker, UTC start/completion timestamps, persisted file count, and total
+physical bytes. Empty scans have zero totals; absent completion time is `-`.
+Failed/running totals are labeled `partial`. Normal refresh failures roll back
+and do not create failed rows, but existing failed history is supported.
+The API equivalent is `catalog.scan_summaries(root)`.
+
+`prune-history` previews by default and writes nothing until `--apply` is supplied.
+Default retention is the newest 3 successful scans; `--keep-last` is at least 1.
+Reports include successful scans retained, successful/failed scans selected, and
+observations selected. Applied output is printed after commit. Current inventory,
+all content identities and tags, and other locations remain unchanged.
+
+`--include-failed` removes only failures whose scan IDs precede the oldest
+retained successful scan, and prints that cutoff. Newer failures and all running
+scans remain; no successful scans means no cutoff or failed cleanup. For example,
+with successful IDs 2, 4, 7 and `--keep-last 2`, delete successful ID 2; opt-in
+cleanup also removes failed IDs below 4. There is no general `--force` bypass.
+
+Both limits accept integers in `1..2**63-1`; invalid arguments return argparse
+exit code 2 before opening the catalog. Missing/invalid catalogs and operational
+failures return 1. Both commands require an existing catalog and read source
+metadata only to resolve the root; they never scan/hash source contents.
+Unknown/unscanned roots report empty history or zero pruning candidates.
+
+No automatic pruning, vacuuming, or file-size reduction is implied. SQLite can
+reuse freed pages; optional `VACUUM` is a separate maintenance decision. Finish
+or close readers before applying retention, including readers in other processes.
+The API and [stream lifecycle](query-grammar.md#history-retention-and-stream-lifetime)
+documentation explain how pruning invalidates handles for deleted scans.

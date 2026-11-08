@@ -26,6 +26,7 @@ from .models import (
     FileObservation,
     HistoricalObservation,
     Location,
+    ScanHistorySummary,
     ScanRun,
     ScanSummary,
     TagProvenance,
@@ -674,6 +675,35 @@ def iter_scan_history(connection: sqlite3.Connection) -> Iterator[ScanRun]:
     try:
         for row in cursor:
             yield _materialize_scan_run(row)
+    finally:
+        cursor.close()
+
+
+def iter_scan_summaries(connection: sqlite3.Connection, location: Location) -> Iterator[ScanHistorySummary]:
+    """Aggregate physical observation totals, including empty/incomplete scans."""
+    cursor = connection.execute(
+        f"""
+        SELECT {_SCAN_PROJECTION},
+               COUNT(observations.id) AS files_observed,
+               COALESCE(SUM(observations.size_bytes), 0) AS total_bytes_observed,
+               scans.id = locations.current_scan_id AS is_current
+        FROM scan_runs AS scans
+        JOIN locations ON locations.id = scans.location_id
+        LEFT JOIN file_observations AS observations ON observations.scan_id = scans.id
+        WHERE locations.id = ?
+        GROUP BY scans.id
+        ORDER BY scans.id DESC
+        """,
+        (location.id,),
+    )
+    try:
+        for row in cursor:
+            yield ScanHistorySummary(
+                scan=_materialize_scan_run(row),
+                files_observed=int(row["files_observed"]),
+                total_bytes_observed=int(row["total_bytes_observed"]),
+                is_current=bool(row["is_current"]),
+            )
     finally:
         cursor.close()
 

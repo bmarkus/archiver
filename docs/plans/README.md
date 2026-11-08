@@ -3,6 +3,12 @@
 Plans record the evolution of Archiver's design and implementation.
 
 **Active plan:** None.
+
+**Implemented (2026-11-08):** [002.3 — Catalog Scan History Pruning](002.3-catalog-scan-history-pruning.md)
+adds explicit transactional retention, per-scan API/CLI summaries, and opt-in
+old-failure cleanup. All acceptance criteria and completion checks passed.
+Plan 005 remains reserved for archive work; no subsequent plan is active.
+
 [Bugfix 006 — Reconciliation path ordering](../bugfixes/006-reconciliation-path-ordering.md)
 is implemented and validated (2026-11-08).
 [002.2 — Refresh Hash Verification](002.2-refresh-hash-verification.md)
@@ -60,6 +66,7 @@ subplans; this does not retroactively rewrite earlier implementation outcomes.
 | 002 | [Catalog Refresh and Reconciliation](002-catalog-refresh-and-reconciliation.md) | Implemented (approved) | 001 | Read-only filesystem reconciliation with typed changes and atomic snapshot application. |
 | 002.1 | [Refresh CLI Preview and Application](002.1-refresh-cli-preview-and-application.md) | Implemented (approved) | 002 | Dry-run reconciliation previews, detailed path reporting, and compatible refresh commands. |
 | 002.2 | [Refresh Hash Verification](002.2-refresh-hash-verification.md) | Implemented | 002 | Incremental refresh defaults, explicit full SHA-256 verification, and a mandatory future-ingestion verification contract. |
+| 002.3 | [Catalog Scan History Pruning](002.3-catalog-scan-history-pruning.md) | Implemented | 002 | Explicit root-scoped successful-scan retention, dry-run reporting, atomic deletion, and preserved inventory/content/tags. |
 | 003 | [Bounded Duplicate Inspection](003-bounded-duplicate-inspection.md) | Implemented (approved) | 001 | Bounded duplicate-group and member inspection with complete aggregate metrics. |
 | 003.1 | [Catalog Safety and Boundary Test Expansion](003.1-catalog-safety-and-boundary-tests.md) | Implemented (approved) | 003 | Regression coverage for transactional, persistence, filesystem, hashing, location, refresh, and CLI safety boundaries. |
 | 003.2 | [Content-Level Tags](003.2-content-level-tags.md) | Implemented (approved) | 003 | Provenance-aware content tags, explicit schema migration, and bounded tag queries. |

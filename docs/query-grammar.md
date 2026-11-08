@@ -449,3 +449,20 @@ The [Catalog CLI reference](catalog-cli.md) records which public queries back ea
 command, their display bounds and ordering, and preserved error behavior. The CLI
 uses typed query rows and explicit totals; it does not expose every library
 transformation or streaming terminal.
+
+## History retention and stream lifetime
+
+Plan 002.3 adds explicit `Catalog.prune_history()` maintenance. The existing
+pinning guarantee across refresh remains: a duplicate handle keeps its resolved
+scan after its outer iterator closes or a refresh publishes a newer scan.
+Deliberately deleting that historical scan invalidates later member reads;
+`PrunedScanError` is raised on first advancement instead of returning misleading
+empty members. Handles for retained scans continue working while their original
+catalog is open. Materialized observations and group views remain ordinary values.
+
+Finish/close every file, history, scan-summary, duplicate-group, and member
+iterator before applied pruning. Do not interleave pruning with iteration on
+this or another connection. No reader registry or automatic retention extension
+is introduced. Dry runs do not delete history. The new `scan_summaries(root)`
+iterator reads on first advancement and needs explicit close on early exit,
+just like existing history streams. Existing closed-catalog errors still apply.

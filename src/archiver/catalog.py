@@ -39,8 +39,17 @@ from ._sqlite_query import (
     iter_duplicate_group_rows,
     iter_observation_history,
     iter_scan_history,
+    iter_scan_summaries,
 )
-from .errors import InvalidCatalogError, RefreshFailure, ScanFailure, StaleRefreshError, TaggingError
+from .errors import (
+    HistoryPruningError,
+    InvalidCatalogError,
+    PrunedScanError,
+    RefreshFailure,
+    ScanFailure,
+    StaleRefreshError,
+    TaggingError,
+)
 from .filesystem import regular_files
 from .hashing import hash_file_stably
 from .models import (
@@ -54,9 +63,11 @@ from .models import (
     FileObservation,
     HistoricalObservation,
     Location,
+    PruneHistorySummary,
     RefreshChange,
     RefreshChangeKind,
     RefreshChangeSet,
+    ScanHistorySummary,
     ScanProgress,
     ScanRun,
     ScanSummary,
@@ -180,6 +191,22 @@ _TAG_SCHEMA_STATEMENTS = (
 
 _BASE_SCHEMA_TABLES = frozenset({"catalog_metadata", "locations", "content", "scan_runs", "file_observations"})
 _TAG_SCHEMA_TABLES = frozenset({"tags", "content_tag_assertions"})
+
+# Selection depends only on scan rows, so it remains stable after deleting the
+# children. Retaining the newest successful scans also preserves the maximum ID.
+_HISTORY_RETENTION_CTE = """
+WITH retained AS (
+    SELECT id FROM scan_runs
+    WHERE location_id = :location_id AND status = 'completed'
+    ORDER BY id DESC LIMIT :keep_last
+), candidates AS (
+    SELECT id, status FROM scan_runs
+    WHERE location_id = :location_id
+      AND ((status = 'completed' AND id NOT IN (SELECT id FROM retained))
+           OR (:include_failed AND status = 'failed'
+               AND id < (SELECT MIN(id) FROM retained)))
+)
+"""
 
 
 def _compare_relative_path_components(left: str, right: str) -> int:
@@ -731,6 +758,14 @@ class Catalog:
     def _stream_duplicate_group_members(
         self, handle: DuplicateGroupHandle, *, limit: int | None
     ) -> Iterator[FileObservation]:
+        with closing(
+            self._connection.execute(
+                "SELECT 1 FROM scan_runs WHERE id = ? AND location_id = ? AND status = 'completed'",
+                (handle._scan_id, handle._location.id),
+            )
+        ) as cursor:
+            if cursor.fetchone() is None:
+                raise PrunedScanError(f"scan {handle._scan_id} is no longer available for duplicate member reads")
         internal_query = DuplicateGroupQueryDescription(
             location=handle._location,
             scan_id=handle._scan_id,
@@ -784,6 +819,119 @@ class Catalog:
         The catalog must remain open while consuming the iterator.
         """
         yield from iter_observation_history(self._connection)
+
+    def scan_summaries(self, root: Path) -> Iterator[ScanHistorySummary]:
+        """Yield newest-first persisted scan totals; incomplete scans are partial.
+
+        Reads begin on first advancement. Close the iterator before pruning;
+        the originating catalog must remain open while consuming it.
+        """
+        location = self._location_for_root(root)
+        if location is not None:
+            yield from iter_scan_summaries(self._connection, location)
+
+    def prune_history(
+        self,
+        root: Path,
+        *,
+        keep_last: int = 3,
+        dry_run: bool = True,
+        include_failed: bool = False,
+    ) -> PruneHistorySummary:
+        """Preview or atomically remove old snapshots without changing inventory.
+
+        Keep the newest successful scans by ID. Opt-in failed cleanup removes
+        only failures before the oldest retained successful scan. Never delete
+        running/current scans, content, or tags. Close readers before applying;
+        handles for deleted scans can no longer load members. No VACUUM is run.
+        """
+        if type(keep_last) is not int:
+            raise TypeError("keep_last must be an integer")
+        if not 1 <= keep_last <= 2**63 - 1:
+            raise ValueError("keep_last must be between 1 and 2**63 - 1")
+        if type(dry_run) is not bool or type(include_failed) is not bool:
+            raise TypeError("dry_run and include_failed must be bools")
+        if self._connection.in_transaction:
+            raise HistoryPruningError("cannot prune history inside an existing transaction")
+        canonical_root = self._canonical_root(root)
+        began = False
+        try:
+            self._connection.execute("BEGIN" if dry_run else "BEGIN IMMEDIATE").close()
+            began = True
+            location = self._location_for_canonical_root(canonical_root)
+            if location is None:
+                summary = PruneHistorySummary(canonical_root, keep_last, dry_run, include_failed, 0, None, 0, 0, 0, 0)
+            else:
+                assert location.id is not None
+                parameters = {"location_id": location.id, "keep_last": keep_last, "include_failed": int(include_failed)}
+                summary = self._history_prune_summary(canonical_root, parameters, dry_run=dry_run)
+                with closing(
+                    self._connection.execute(
+                        _HISTORY_RETENTION_CTE
+                        + """
+                    SELECT 1 FROM locations
+                    WHERE current_scan_id IN (SELECT id FROM candidates) LIMIT 1
+                    """,
+                        parameters,
+                    )
+                ) as cursor:
+                    if cursor.fetchone() is not None:
+                        raise HistoryPruningError("pruning would remove a referenced current scan")
+                if not dry_run:
+                    for statement, expected in (
+                        (
+                            "DELETE FROM file_observations WHERE scan_id IN (SELECT id FROM candidates)",
+                            summary.observations_to_remove,
+                        ),
+                        ("DELETE FROM scan_runs WHERE id IN (SELECT id FROM candidates)", summary.scans_to_remove),
+                    ):
+                        self._connection.execute(_HISTORY_RETENTION_CTE + statement, parameters).close()
+                        with closing(self._connection.execute("SELECT changes()")) as cursor:
+                            row = cursor.fetchone()
+                            assert row is not None
+                            if int(row[0]) != expected:
+                                raise HistoryPruningError("history deletion count did not match its transaction report")
+            self._connection.commit()
+            began = False
+            return summary
+        except BaseException as error:
+            if began:
+                self._connection.rollback()
+            if isinstance(error, sqlite3.Error):
+                raise HistoryPruningError(f"could not prune history for {canonical_root}") from error
+            raise
+
+    def _history_prune_summary(self, root: Path, parameters: dict[str, int], *, dry_run: bool) -> PruneHistorySummary:
+        with closing(
+            self._connection.execute(
+                _HISTORY_RETENTION_CTE
+                + """
+            SELECT (SELECT COUNT(*) FROM retained) AS retained_count,
+                   (SELECT MIN(id) FROM retained) AS cutoff,
+                   COUNT(*) AS scan_count,
+                   COALESCE(SUM(status = 'completed'), 0) AS successful_count,
+                   COALESCE(SUM(status = 'failed'), 0) AS failed_count,
+                   (SELECT COUNT(*) FROM file_observations
+                    WHERE scan_id IN (SELECT id FROM candidates)) AS observation_count
+            FROM candidates
+            """,
+                parameters,
+            )
+        ) as cursor:
+            row = cursor.fetchone()
+            assert row is not None
+            return PruneHistorySummary(
+                root=root,
+                keep_last=parameters["keep_last"],
+                dry_run=dry_run,
+                include_failed=bool(parameters["include_failed"]),
+                successful_scans_retained=int(row["retained_count"]),
+                oldest_retained_scan_id=None if row["cutoff"] is None else int(row["cutoff"]),
+                scans_to_remove=int(row["scan_count"]),
+                observations_to_remove=int(row["observation_count"]),
+                successful_scans_to_remove=int(row["successful_count"]),
+                failed_scans_to_remove=int(row["failed_count"]),
+            )
 
     def _content_record(self, content_id: ContentId) -> tuple[int, int]:
         record = execute_content_record(self._connection, content_id)

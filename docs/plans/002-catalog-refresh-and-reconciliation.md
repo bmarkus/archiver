@@ -51,3 +51,12 @@ query agree with depth-first traversal and `PurePosixPath` merge comparisons:
 reconciliation uses POSIX component order, not complete path-string order.
 This corrects false new/missing classifications for a directory beside a
 similarly named ZIP file. Public read-query ordering and schema are unchanged.
+
+## Explicit retention follow-up — 2026-11-08
+
+[Plan 002.3](002.3-catalog-scan-history-pruning.md) adds per-scan summary reads
+and explicit transactional pruning. Current snapshots, content, and tags remain;
+retained scan IDs stay unchanged. Optional failed cleanup is limited to rows
+before the retained successful window. Pruning never runs during refresh, and
+previously reconciled current-baseline change sets remain applicable. Earlier
+implementation outcomes are preserved.

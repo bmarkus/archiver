@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 
 import archiver
+import archiver.errors
 import archiver.models
 import archiver.pandas
 import archiver.query
@@ -79,6 +80,8 @@ def test_public_imports_and_retired_surface() -> None:
         assert getattr(archiver, name) is getattr(archiver.query, name)
     for name in (
         "ContentRecord",
+        "ScanHistorySummary",
+        "PruneHistorySummary",
         "CurrentFileTagView",
         "ContentTagView",
         "DuplicateGroupView",
@@ -88,6 +91,8 @@ def test_public_imports_and_retired_surface() -> None:
         "validate_tag_name",
     ):
         assert getattr(archiver, name) is getattr(archiver.models, name)
+    for name in ("HistoryPruningError", "PrunedScanError"):
+        assert getattr(archiver, name) is getattr(archiver.errors, name)
     for name in _RETIRED_TYPES:
         assert not hasattr(archiver, name)
         assert not hasattr(archiver.models, name)

@@ -19,3 +19,11 @@ class StaleRefreshError(RefreshFailure):
 
 class TaggingError(Exception):
     """Raised when a tag operation cannot resolve its catalog target."""
+
+
+class HistoryPruningError(Exception):
+    """Raised when explicit history maintenance cannot complete safely."""
+
+
+class PrunedScanError(Exception):
+    """Raised when a duplicate handle's observation scan is no longer available."""

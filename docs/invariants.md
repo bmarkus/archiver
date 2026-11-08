@@ -47,3 +47,14 @@ These properties are intended to remain true across implementations and refactor
 23. **Plan 001 does not manage archive storage.**
 24. **Plan 001 does not resolve duplicates destructively.**
 25. **Plan 001 does not implement tag policy, ingest, merge, or working-copy lifecycle.**
+
+## Explicit history retention — 2026-11-08
+
+Plan 002.3 authorizes explicit pruning of old scan rows and observations while
+preserving invariant 8 for retained records: their original scan identity remains
+distinguishable and unchanged. The current successful snapshot must remain,
+and pruning is atomic on success/failure (7, 18, 20). Content identities and tag
+assertion/retraction/provenance history survive even if their last historical
+path observation is removed (1, 15). No automatic retention or source mutation
+is implied. Existing stream pinning survives refresh but cannot preserve rows
+that a caller explicitly prunes; pruned duplicate-member reads fail clearly.

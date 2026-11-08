@@ -151,13 +151,15 @@ limits, sorting, error codes, and examples.
 
 ```powershell
 uv run archiver catalog -h
-usage: archiver catalog [-h] {init,migrate,info,refresh,scan,duplicates,files,tags} ...
+usage: archiver catalog [-h] {init,migrate,info,history,prune-history,refresh,scan,duplicates,files,tags} ...
 
 positional arguments:
-  {init,migrate,info,refresh,scan,duplicates,files,tags}
+  {init,migrate,info,history,prune-history,refresh,scan,duplicates,files,tags}
     init                create a catalog without scanning
     migrate             explicitly migrate an older catalog schema
     info                show catalog and current-scan information
+    history             show newest-first scan dates and persisted file/size totals
+    prune-history       preview old scan deletion; --apply commits it
     refresh             reconcile and atomically refresh the catalog root
     scan                compatibility alias for refresh
     duplicates          show aggregate duplicate metrics
@@ -278,3 +280,21 @@ If an implementation plan conflicts with a documented invariant, the conflict sh
 Archiver is licensed under the [MIT License](LICENSE).
 
 Routine refreshes reuse SHA-256 identities when relative path, size, and nanosecond mtime match. Use `catalog.scan_directory(root, verify_hashes=True)` or CLI `--verify-hashes` to hash every included file and detect same-size changes with restored timestamps. Verification remains read-only and supports dry-run reconciliation. Future archive ingestion must verify the copied destination bytes independently, even when the source catalog has a hash; archive ingestion remains future work.
+
+Inspect scan dates, statuses, and file/size totals, then preview or explicitly
+apply scan-history retention:
+
+```powershell
+uv run archiver catalog history C:\path\to\root --limit 20
+uv run archiver catalog prune-history C:\path\to\root --keep-last 3
+uv run archiver catalog prune-history C:\path\to\root --keep-last 3 --include-failed --apply
+```
+
+Pruning preserves the current inventory, all content identities, and tag
+assertions. `--include-failed` includes failures before the oldest retained
+successful scan; newer failures and all running scans stay. No automatic pruning
+or `VACUUM` occurs. The API offers `catalog.scan_summaries(root)` and
+`catalog.prune_history(root, keep_last=3, dry_run=True, include_failed=False)`.
+See the [API](docs/catalog-api.md#prune_history) and
+[CLI reference](docs/catalog-cli.md#scan-history-and-explicit-pruning) for lifecycle
+rules and reporting details.

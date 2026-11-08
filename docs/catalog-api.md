@@ -234,6 +234,80 @@ scan_history() -> Iterator[ScanRun]
 
 Lazily yield all persisted scan runs, including running/failed rows, ordered by location root then scan ID. Keep the catalog open during consumption.
 
+### `scan_summaries`
+
+```python
+scan_summaries(root: Path) -> Iterator[ScanHistorySummary]
+```
+
+Stream all persisted scans for one root, newest scan ID first. Each immutable
+`ScanHistorySummary` contains `scan: ScanRun`, `files_observed`,
+`total_bytes_observed`, and `is_current`. Scan metadata supplies ID, location,
+status, start time, and optional completion time. Counts include duplicate
+physical copies and empty files; empty scans appear with zero totals. Failed
+and running scan totals are partial persisted observations, not current inventory.
+Reads begin on first advancement; keep the catalog open and close a partially
+consumed iterator with `contextlib.closing`. Unknown/unscanned roots yield no rows.
+
+### `prune_history`
+
+```python
+prune_history(root: Path, *, keep_last: int=3, dry_run: bool=True, include_failed: bool=False) -> PruneHistorySummary
+```
+
+Explicitly preview or delete old history for one root. Retain the newest N
+successful (`completed`) scans by descending ID, with a minimum of 1; timestamps
+do not determine retention. Default `dry_run=True` writes nothing. Application
+recomputes its own candidates and deletes observations before scan records in
+one transaction. A preview report is not a deletion token.
+
+`include_failed=True` also removes failed scans before the oldest retained
+successful scan. Newer failures and all running scans stay. Without any
+successful scan there is no cutoff and no failed cleanup. Keeping fewer than
+N successes still allows opt-in failures before the oldest success to be removed.
+Current scans referenced by any location are protected. Content, tags, all
+assertions/retractions/provenance, and other roots are preserved, including
+content with no remaining file observations. Retained IDs are never renumbered.
+
+`PruneHistorySummary` has `root`, `keep_last`, `dry_run`, `include_failed`,
+`successful_scans_retained`, `oldest_retained_scan_id` (or `None`),
+`scans_to_remove`, `observations_to_remove`, `successful_scans_to_remove`, and
+`failed_scans_to_remove`. Counts describe candidates in preview mode and actual
+removed rows after successful application. The two status counts sum to total
+scans removed. No unbounded ID list is materialized.
+
+`keep_last` must be an exact integer in `1..2**63-1` (excluding bool); wrong types
+raise `TypeError`, out-of-range values raise `ValueError`. Both flags require
+actual bools. Existing root rules apply: an accessible directory, no symlink
+root. An unknown/unscanned root returns zero counts without creating a location.
+An existing transaction or protected current-scan candidate raises
+`HistoryPruningError`. SQLite failures are wrapped in that error with their
+cause. Application/read-transaction errors and interruptions roll back; a caller's
+existing transaction is never committed or rolled back by this operation.
+
+Finish or close all history/summary/file/group/member iterators before applying
+pruning. Do not interleave maintenance and iteration on this or another
+connection. Materialized values survive. Duplicate handles retain their members
+across refresh and while their scan is retained; loading members after that scan
+is pruned raises `PrunedScanError` on first advancement. Handles remain bound to
+the originating open catalog; closed-catalog errors retain their normal behavior.
+
+No pruning happens automatically during refresh/open/close. `VACUUM` is separate
+optional maintenance, not part of this API. Deleted pages are reusable by SQLite;
+the file need not shrink, and preserving all content identities means this is
+not a permanent bound on database size. Offline-root maintenance and running-scan
+recovery are outside this operation.
+
+```python
+for item in catalog.scan_summaries(root):
+    print(item.scan.id, item.scan.status, item.files_observed, item.total_bytes_observed)
+
+preview = catalog.prune_history(root, keep_last=3, include_failed=True)
+print(preview.scans_to_remove, preview.observations_to_remove)
+# Explicitly apply after reviewing; this call recomputes the candidate set.
+result = catalog.prune_history(root, keep_last=3, include_failed=True, dry_run=False)
+```
+
 ### `observation_history`
 
 ```python
@@ -326,7 +400,8 @@ All query classes (`CurrentFileQuery`, `CurrentFileTagQuery`, `ContentQuery`,
 `DuplicateGroupHandle`) are available from `archiver`. Result classes
 `FileObservation`, `CurrentFileTagView`, `ContentRecord`, `ContentTagView`,
 `TagUsage`, `DuplicateGroupView`, and `DuplicateSummary` are also available there,
-along with retained scan/refresh/history records, provenance types, errors, and
+along with `ScanHistorySummary`, `PruneHistorySummary`, `HistoryPruningError`,
+`PrunedScanError`, retained scan/refresh/history records, provenance types, errors, and
 `validate_tag_name`. Expression factories belong in `archiver.query`.
 
 The separate adapters `current_files_frame`, `observation_history_frame`, and

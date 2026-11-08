@@ -5,16 +5,19 @@ from __future__ import annotations
 import argparse
 import re
 import shutil
+import sqlite3
 import sys
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
+from contextlib import closing
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
+from itertools import islice
 from pathlib import Path, PurePosixPath
 from textwrap import wrap
-from typing import Literal, TextIO, TypeAlias
+from typing import Literal, TextIO, TypeAlias, cast
 
 from .catalog import SCHEMA_VERSION, Catalog
-from .errors import InvalidCatalogError, ScanFailure, TaggingError
+from .errors import HistoryPruningError, InvalidCatalogError, ScanFailure, TaggingError
 from .models import (
     ContentId,
     ContentTagAssertion,
@@ -26,6 +29,7 @@ from .models import (
     RefreshChange,
     RefreshChangeSet,
     RefreshSummary,
+    ScanHistorySummary,
     ScanProgress,
     ScanRun,
     ScanSummary,
@@ -75,6 +79,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             _handle_tags(arguments)
         elif arguments.catalog_command == "info":
             _show_catalog_info(arguments.root)
+        elif arguments.catalog_command == "history":
+            _show_scan_history(arguments.root, limit=arguments.limit)
+        elif arguments.catalog_command == "prune-history":
+            _prune_catalog_history(
+                arguments.root,
+                keep_last=arguments.keep_last,
+                include_failed=arguments.include_failed,
+                apply=arguments.apply,
+            )
         elif arguments.catalog_command in ("refresh", "scan"):
             _refresh_catalog(
                 arguments.root,
@@ -116,7 +129,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
         else:
             parser.error("a catalog command is required")
-    except (InvalidCatalogError, ScanFailure, TaggingError, OSError) as error:
+    except (HistoryPruningError, InvalidCatalogError, ScanFailure, TaggingError, OSError) as error:
         print(f"archiver: {error}", file=sys.stderr)
         return 1
     return 0
@@ -132,6 +145,8 @@ def _build_parser() -> argparse.ArgumentParser:
         ("init", "create a catalog without scanning"),
         ("migrate", "explicitly migrate an older catalog schema"),
         ("info", "show catalog and current-scan information"),
+        ("history", "show newest-first scan dates and persisted file/size totals"),
+        ("prune-history", "preview old scan deletion; --apply commits it"),
         ("refresh", "reconcile and atomically refresh the catalog root"),
         ("scan", "compatibility alias for refresh"),
         ("duplicates", "show aggregate duplicate metrics"),
@@ -139,6 +154,30 @@ def _build_parser() -> argparse.ArgumentParser:
     ):
         subparser = catalog_commands.add_parser(command, help=help_text)
         subparser.add_argument("root", type=Path, metavar="ROOT")
+        if command == "history":
+            subparser.add_argument(
+                "--limit",
+                type=_history_positive_int,
+                default=20,
+                metavar="N",
+                help="maximum scans to display (default: 20)",
+            )
+        if command == "prune-history":
+            subparser.add_argument(
+                "--keep-last",
+                type=_history_positive_int,
+                default=3,
+                metavar="N",
+                help="retain N newest successful scans, minimum 1 (default: 3)",
+            )
+            subparser.add_argument(
+                "--include-failed",
+                action="store_true",
+                help="also remove failures before the oldest retained successful scan; never running scans",
+            )
+            subparser.add_argument(
+                "--apply", action="store_true", help="commit deletion instead of the default dry run"
+            )
         if command in ("refresh", "scan"):
             subparser.add_argument(
                 "--verify-hashes",
@@ -557,6 +596,50 @@ def _show_catalog_info(root_argument: Path) -> None:
             _print_current_scan(current_scan, current_summary)
 
 
+def _show_scan_history(root_argument: Path, *, limit: int) -> None:
+    root, database_path = _catalog_paths(root_argument)
+    try:
+        with Catalog.open(database_path) as catalog:
+            with closing(cast(Generator[ScanHistorySummary, None, None], catalog.scan_summaries(root))) as rows:
+                print("Scan history (UTC; failed/running totals are partial)")
+                print("ID  STATUS  CURRENT  STARTED UTC  COMPLETED UTC  FILES  SIZE  OBSERVATIONS")
+                count = 0
+                for item in islice(rows, limit):
+                    scan = item.scan
+                    completed = "-" if scan.completed_at_ns is None else _format_utc(scan.completed_at_ns)
+                    completeness = "complete" if scan.status == "completed" else "partial"
+                    print(
+                        f"{scan.id}  {scan.status}  {'*' if item.is_current else '-'}  "
+                        f"{_format_utc(scan.started_at_ns)}  {completed}  {item.files_observed}  "
+                        f"{_format_byte_count(item.total_bytes_observed)}  {completeness}"
+                    )
+                    count += 1
+                if not count:
+                    print("No scan history.")
+    except sqlite3.Error as error:
+        raise InvalidCatalogError(f"could not read scan history for {root}") from error
+
+
+def _prune_catalog_history(root_argument: Path, *, keep_last: int, include_failed: bool, apply: bool) -> None:
+    root, database_path = _catalog_paths(root_argument)
+    with Catalog.open(database_path) as catalog:
+        summary = catalog.prune_history(root, keep_last=keep_last, include_failed=include_failed, dry_run=not apply)
+    print("History pruning completed" if apply else "History pruning preview")
+    print(f"Root: {summary.root}")
+    print(f"Successful scans retained: {summary.successful_scans_retained}")
+    print(f"Scans {'removed' if apply else 'to remove'}: {summary.scans_to_remove}")
+    print(f"  Successful: {summary.successful_scans_to_remove}")
+    print(f"  Failed: {summary.failed_scans_to_remove}")
+    print(f"Observations {'removed' if apply else 'to remove'}: {summary.observations_to_remove}")
+    if include_failed:
+        if summary.oldest_retained_scan_id is None:
+            print("No successful-scan cutoff; no failed scans are removed.")
+        else:
+            print(f"Failed cleanup: scan IDs before {summary.oldest_retained_scan_id} only; newer failures remain.")
+    if not apply:
+        print("No catalog changes were written. Use --apply to commit deletion.")
+
+
 def _refresh_catalog(
     root_argument: Path,
     *,
@@ -908,6 +991,13 @@ def _nonnegative_int(value: str) -> int:
     parsed = int(value)
     if parsed < 0:
         raise argparse.ArgumentTypeError("must be at least 0")
+    return parsed
+
+
+def _history_positive_int(value: str) -> int:
+    parsed = int(value)
+    if not 1 <= parsed <= 2**63 - 1:
+        raise argparse.ArgumentTypeError("must be between 1 and 2**63 - 1")
     return parsed
 
 
