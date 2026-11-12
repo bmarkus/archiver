@@ -601,6 +601,7 @@ def _materialize_scan_run(row: sqlite3.Row) -> ScanRun:
         id=int(row["scan_id"]),
         location=Location(int(row["location_id"]), Path(str(row["root_path"]))),
         status=str(row["scan_status"]),
+        origin=str(row["scan_origin"]),
         started_at_ns=int(row["started_at_ns"]),
         completed_at_ns=None if completed_at_ns is None else int(completed_at_ns),
     )
@@ -611,6 +612,7 @@ _SCAN_PROJECTION = """
     locations.id AS location_id,
     locations.root_path AS root_path,
     scans.status AS scan_status,
+    scans.origin AS scan_origin,
     scans.started_at_ns AS started_at_ns,
     scans.completed_at_ns AS completed_at_ns
 """

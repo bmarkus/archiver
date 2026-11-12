@@ -74,7 +74,13 @@ Becoming an archive does not require replacing the catalog data model with an un
 
 A **scan** observes a location and records the content found there.
 
-A scan is a historical event. The current state of a location is derived from its most recent successful scan.
+A scan is a historical event. The current inventory of a location comes from its
+most recent successful inventory publication: either a full scan or a targeted
+update (Plan 005.1). A targeted update inherits untouched records and applies
+selected observations/removals. Inherited membership does not mean those files
+were freshly observed. Inventories describe known file instances, not guaranteed
+complete directory coverage. Snapshot origin identifies the publication method,
+not coverage. Retained snapshots are immutable and distinguishable.
 
 An incomplete or failed scan must not silently become the current state.
 
@@ -167,3 +173,15 @@ observation still belongs to its original scan; IDs are not renumbered or merged
 Retention does not mutate observed files, imply archive authority, or run
 automatically during scanning. It removes historical path evidence, not content
 identity or tag history.
+
+## Targeted publication and retention — 2026-11-12
+
+Plan 005.1 permits database-only additions, replacements, and removals of known
+file instances. These do not grant physical mutation authority. Publication
+checks an inventory revision and atomically replaces current state on success.
+Explicit publication retention keeps the latest two successful snapshots by
+default for targeted updates; full scans retain their existing keep-all default.
+Pruning occurs in the publication transaction, preserving the prior committed
+state/history on failure, content identities, and all tag provenance/history.
+Historical membership in an inherited snapshot is not a new observation event.
+Physical file operations and database commits cannot share an atomic transaction.

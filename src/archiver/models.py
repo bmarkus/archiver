@@ -2,7 +2,7 @@
 
 import re
 import string
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Literal, TypeAlias
 
@@ -105,7 +105,7 @@ class Location:
 
 @dataclass(frozen=True, slots=True)
 class FileObservation:
-    """A regular file observed in one completed scan."""
+    """Known regular-file content and metadata, possibly inherited in a snapshot."""
 
     location: Location
     relative_path: PurePosixPath
@@ -172,18 +172,19 @@ class RefreshChangeSet:
 
 @dataclass(frozen=True, slots=True)
 class ScanRun:
-    """One attempted scan of a cataloged location."""
+    """One inventory publication attempt; origin identifies full or targeted work."""
 
     id: int
     location: Location
     status: str
     started_at_ns: int
     completed_at_ns: int | None
+    origin: str = "full_scan"
 
 
 @dataclass(frozen=True, slots=True)
 class HistoricalObservation:
-    """A file observation together with the scan that recorded it."""
+    """Snapshot membership; inherited records are not fresh observation events."""
 
     scan: ScanRun
     relative_path: PurePosixPath
@@ -256,3 +257,35 @@ class DuplicateGroupView:
     file_instance_count: int
     potential_redundant_bytes: int
     members: tuple[FileObservation, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class InventoryRevision:
+    """Opaque catalog/location-scoped token; callers must not interpret fields."""
+
+    _catalog_uuid: str = field(repr=False)
+    _root: Path = field(repr=False)
+    _snapshot_id: int | None = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class InventoryChanges:
+    """Prepared observations; obtain through Catalog.prepare_file_update()."""
+
+    location: Location
+    baseline: InventoryRevision
+    _upserts: tuple[FileObservation, ...] = field(repr=False)
+    _removals: tuple[PurePosixPath, ...] = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class InventoryUpdateResult:
+    """Published revision, changed-path counts, inventory totals and retention."""
+
+    revision: InventoryRevision
+    origin: str | None
+    inserted_files: int
+    replaced_files: int
+    removed_files: int
+    inventory: ScanSummary | None
+    retention: PruneHistorySummary | None

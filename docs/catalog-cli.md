@@ -121,7 +121,8 @@ than row number or abbreviated digest, identifies a group. See the
 ## Lifecycle, exact reads, and errors
 
 `catalog init ROOT` creates a catalog without scanning. `catalog migrate ROOT`
-explicitly upgrades an older supported schema. `catalog info ROOT` uses metadata
+validates a current catalog; legacy schemas require an explicit rebuild in a
+separate database. `catalog info ROOT` uses metadata
 and exact current-state reads. `catalog refresh ROOT` reconciles and atomically
 applies observations; `catalog scan ROOT` remains its compatibility alias.
 `--dry-run` previews changes without writing catalog state. Refresh details
@@ -214,3 +215,13 @@ reuse freed pages; optional `VACUUM` is a separate maintenance decision. Finish
 or close readers before applying retention, including readers in other processes.
 The API and [stream lifecycle](query-grammar.md#history-retention-and-stream-lifetime)
 documentation explain how pruning invalidates handles for deleted scans.
+
+## Schema 3 and inventory publication (Plan 005.1)
+
+New catalogs use schema 3. `catalog migrate` validates a current catalog but
+rejects versions 1 and 2 without writes. Create a separate catalog and rescan to
+rebuild; rescanning does not recover tags/provenance. History and info show
+snapshot origin (`full_scan` or `targeted_update`). Completed snapshot totals
+represent known inventory; targeted inherited records are not fresh observations
+and no directory-completeness guarantee is implied. Targeted registration and
+publication retention are Python APIs; no new CLI workflow is introduced.

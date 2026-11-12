@@ -143,7 +143,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     for command, help_text in (
         ("init", "create a catalog without scanning"),
-        ("migrate", "explicitly migrate an older catalog schema"),
+        ("migrate", "validate current schema; older catalogs require rebuilding"),
         ("info", "show catalog and current-scan information"),
         ("history", "show newest-first scan dates and persisted file/size totals"),
         ("prune-history", "preview old scan deletion; --apply commits it"),
@@ -601,8 +601,8 @@ def _show_scan_history(root_argument: Path, *, limit: int) -> None:
     try:
         with Catalog.open(database_path) as catalog:
             with closing(cast(Generator[ScanHistorySummary, None, None], catalog.scan_summaries(root))) as rows:
-                print("Scan history (UTC; failed/running totals are partial)")
-                print("ID  STATUS  CURRENT  STARTED UTC  COMPLETED UTC  FILES  SIZE  OBSERVATIONS")
+                print("Scan history (UTC; failed/running totals are partial; known inventory, no coverage guarantee)")
+                print("ID  STATUS  CURRENT  STARTED UTC  COMPLETED UTC  FILES  SIZE  SNAPSHOT  ORIGIN")
                 count = 0
                 for item in islice(rows, limit):
                     scan = item.scan
@@ -611,7 +611,7 @@ def _show_scan_history(root_argument: Path, *, limit: int) -> None:
                     print(
                         f"{scan.id}  {scan.status}  {'*' if item.is_current else '-'}  "
                         f"{_format_utc(scan.started_at_ns)}  {completed}  {item.files_observed}  "
-                        f"{_format_byte_count(item.total_bytes_observed)}  {completeness}"
+                        f"{_format_byte_count(item.total_bytes_observed)}  {completeness}  {scan.origin}"
                     )
                     count += 1
                 if not count:
@@ -1018,9 +1018,17 @@ def _canonical_root(root: Path) -> Path:
 
 def _print_current_scan(scan: ScanRun, summary: ScanSummary) -> None:
     print(f"Current scan: {scan.id}")
+    print(f"Snapshot origin: {scan.origin}")
     assert scan.completed_at_ns is not None
     print(f"Completed at: {_format_utc(scan.completed_at_ns)}")
-    _print_scan_summary(summary)
+    if scan.origin == "targeted_update":
+        print("Known inventory; inherited records were not freshly observed.")
+        print(f"Known files: {summary.files_observed}")
+        print(f"Known total size: {_format_byte_count(summary.total_bytes_observed)}")
+        print(f"Distinct content: {summary.distinct_content_count}")
+        print(f"Duplicate groups: {summary.duplicate_content_group_count}")
+    else:
+        _print_scan_summary(summary)
 
 
 def _print_scan_summary(summary: ScanSummary) -> None:

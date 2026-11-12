@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from collections.abc import Callable, Collection, Iterator
 from contextlib import closing, suppress
@@ -50,7 +51,7 @@ from .errors import (
     StaleRefreshError,
     TaggingError,
 )
-from .filesystem import regular_files
+from .filesystem import regular_files, targeted_path
 from .hashing import hash_file_stably
 from .models import (
     ContentId,
@@ -62,6 +63,9 @@ from .models import (
     DuplicateSummary,
     FileObservation,
     HistoricalObservation,
+    InventoryChanges,
+    InventoryRevision,
+    InventoryUpdateResult,
     Location,
     PruneHistorySummary,
     RefreshChange,
@@ -86,7 +90,7 @@ from .query import (
     duplicate,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 _TAG_NAME_REGEX_FUNCTION = "archiver_tag_name_regex"
 
 _SCHEMA = """
@@ -112,7 +116,8 @@ CREATE TABLE scan_runs (
     location_id INTEGER NOT NULL REFERENCES locations(id),
     started_at_ns INTEGER NOT NULL,
     completed_at_ns INTEGER,
-    status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed'))
+    status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+    origin TEXT NOT NULL DEFAULT 'full_scan' CHECK (origin IN ('full_scan', 'targeted_update'))
 );
 CREATE TABLE file_observations (
     id INTEGER PRIMARY KEY,
@@ -154,41 +159,6 @@ ON content_tag_assertions (tag_id, content_id)
 WHERE retracted_at_ns IS NULL;
 """
 
-_TAG_SCHEMA_STATEMENTS = (
-    "CREATE TABLE tags (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE)",
-    """
-    CREATE TABLE content_tag_assertions (
-        id INTEGER PRIMARY KEY,
-        content_id INTEGER NOT NULL REFERENCES content(id),
-        tag_id INTEGER NOT NULL REFERENCES tags(id),
-        provenance_kind TEXT NOT NULL CHECK (provenance_kind IN ('user', 'system')),
-        source_name TEXT NOT NULL CHECK (length(source_name) > 0),
-        source_version TEXT NOT NULL CHECK (length(source_version) > 0),
-        source_detail TEXT NOT NULL DEFAULT '',
-        asserted_at_ns INTEGER NOT NULL,
-        retracted_at_ns INTEGER,
-        CHECK (retracted_at_ns IS NULL OR retracted_at_ns >= asserted_at_ns)
-    )
-    """,
-    """
-    CREATE UNIQUE INDEX content_tag_assertions_active_source
-    ON content_tag_assertions (
-        content_id, tag_id, provenance_kind, source_name, source_version, source_detail
-    )
-    WHERE retracted_at_ns IS NULL
-    """,
-    """
-    CREATE INDEX content_tag_assertions_content_active
-    ON content_tag_assertions (content_id, tag_id)
-    WHERE retracted_at_ns IS NULL
-    """,
-    """
-    CREATE INDEX content_tag_assertions_tag_active
-    ON content_tag_assertions (tag_id, content_id)
-    WHERE retracted_at_ns IS NULL
-    """,
-)
-
 _BASE_SCHEMA_TABLES = frozenset({"catalog_metadata", "locations", "content", "scan_runs", "file_observations"})
 _TAG_SCHEMA_TABLES = frozenset({"tags", "content_tag_assertions"})
 
@@ -221,6 +191,10 @@ def _validate_schema_tables(connection: sqlite3.Connection, version: int) -> Non
     actual = {str(row[0]) for row in rows}
     required = _BASE_SCHEMA_TABLES | (_TAG_SCHEMA_TABLES if version == SCHEMA_VERSION else frozenset())
     missing = sorted(required - actual)
+    if version == SCHEMA_VERSION:
+        columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(scan_runs)")}
+        if "origin" not in columns:
+            raise InvalidCatalogError("catalog schema is missing scan_runs.origin")
     if missing:
         raise InvalidCatalogError(f"catalog schema is missing required tables: {', '.join(missing)}")
 
@@ -233,11 +207,20 @@ class Catalog:
         self._connection = connection
         self._connection.row_factory = sqlite3.Row
         self._connection.create_collation("archiver_path_components", _compare_relative_path_components)
+        self._connection.create_collation(
+            "archiver_path_key",
+            lambda a, b: (os.path.normcase(a) > os.path.normcase(b)) - (os.path.normcase(a) < os.path.normcase(b)),
+        )
         self._connection.execute("PRAGMA foreign_keys = ON")
+        # Allocate connection-local staging before any query cursors can be open.
+        # Publication only changes rows: DDL would lock active pinned readers.
+        self._connection.execute(
+            "CREATE TEMP TABLE inventory_affected(path TEXT COLLATE archiver_path_key PRIMARY KEY)"
+        ).close()
 
     @classmethod
     def create(cls, database_path: Path) -> Catalog:
-        """Create a new schema-version-2 catalog at an unused path."""
+        """Create a new schema-version-3 catalog at an unused path."""
         path = database_path.resolve(strict=False)
         if path.exists():
             raise InvalidCatalogError(f"catalog database already exists: {path}")
@@ -258,49 +241,9 @@ class Catalog:
 
     @classmethod
     def migrate(cls, database_path: Path) -> bool:
-        """Explicitly migrate a schema-version-1 catalog to version 2.
-
-        Return ``True`` when a migration was applied and ``False`` when the
-        catalog was already current.
-        """
-        path = database_path.resolve(strict=False)
-        if not path.is_file():
-            raise InvalidCatalogError(f"catalog database does not exist: {path}")
-        try:
-            connection = sqlite3.connect(path)
-            connection.execute("PRAGMA foreign_keys = ON")
-            row = connection.execute(
-                "SELECT catalog_uuid, schema_version FROM catalog_metadata WHERE singleton = 1"
-            ).fetchone()
-            if row is None:
-                raise InvalidCatalogError("catalog metadata is missing")
-            version = row[1]
-            if version == SCHEMA_VERSION:
-                _validate_schema_tables(connection, SCHEMA_VERSION)
-                connection.close()
-                return False
-            if version != 1:
-                raise InvalidCatalogError(
-                    f"unsupported catalog schema version: {version} (expected 1 or {SCHEMA_VERSION})"
-                )
-            _validate_schema_tables(connection, 1)
-            with connection:
-                for statement in _TAG_SCHEMA_STATEMENTS:
-                    connection.execute(statement)
-                connection.execute(
-                    "UPDATE catalog_metadata SET schema_version = ? WHERE singleton = 1",
-                    (SCHEMA_VERSION,),
-                )
-                _validate_schema_tables(connection, SCHEMA_VERSION)
-        except sqlite3.Error as error:
-            with suppress(UnboundLocalError):
-                connection.close()
-            raise InvalidCatalogError(f"could not migrate catalog: {path}") from error
-        except InvalidCatalogError:
-            connection.close()
-            raise
-        connection.close()
-        return True
+        """Validate a current catalog; legacy versions require an explicit rebuild."""
+        with cls.open(database_path):
+            return False
 
     @classmethod
     def open(cls, database_path: Path) -> Catalog:
@@ -317,9 +260,10 @@ class Catalog:
             if row is None:
                 raise InvalidCatalogError("catalog metadata is missing")
             version = row[1]
-            if version == 1:
+            if version in (1, 2):
                 raise InvalidCatalogError(
-                    "catalog schema version 1 requires migration; run 'archiver catalog migrate ROOT'"
+                    f"catalog schema version {version} requires an explicit rebuild in a new database; "
+                    "rescanning does not preserve tags or provenance"
                 )
             if version != SCHEMA_VERSION:
                 raise InvalidCatalogError(f"unsupported catalog schema version: {version} (expected {SCHEMA_VERSION})")
@@ -367,17 +311,19 @@ class Catalog:
         root: Path,
         *,
         verify_hashes: bool = False,
+        keep_last: int | None = None,
         excluded_directories: Collection[Path] = (),
         progress_callback: Callable[[ScanProgress], None] | None = None,
     ) -> ScanSummary:
         """Reconcile and apply observations, optionally hashing every included file."""
+        self._validate_retention(keep_last)
         change_set = self.reconcile_directory(
             root,
             verify_hashes=verify_hashes,
             excluded_directories=excluded_directories,
             progress_callback=progress_callback,
         )
-        return self.apply_refresh(change_set)
+        return self.apply_refresh(change_set, keep_last=keep_last)
 
     def reconcile_directory(
         self,
@@ -452,44 +398,255 @@ class Catalog:
 
         return RefreshChangeSet(location=location, baseline_scan_id=baseline_scan_id, changes=tuple(changes))
 
-    def apply_refresh(self, change_set: RefreshChangeSet) -> ScanSummary:
-        """Atomically apply observations after checking their catalog baseline."""
+    def apply_refresh(self, change_set: RefreshChangeSet, *, keep_last: int | None = None) -> ScanSummary:
+        """Publish a full inventory atomically after checking its baseline."""
+        self._validate_retention(keep_last)
         try:
-            with self._connection:
-                location = self._location_for_refresh_apply(change_set)
-                assert location.id is not None
-                current_scan_id = self._current_scan_id(location.id)
-                if current_scan_id != change_set.baseline_scan_id:
-                    raise StaleRefreshError("refresh change set no longer matches the catalog current state")
-                scan_id = self._insert_running_scan(location.id)
-                for change in change_set.changes:
-                    if change.current is None:
-                        continue
-                    current = change.current
-                    if current.location.root != location.root:
-                        raise RefreshFailure("refresh change set contains an observation for a different location")
-                    content_row_id = self._get_or_create_content(current.content_id, current.size_bytes)
-                    self._connection.execute(
-                        """
-                        INSERT INTO file_observations (scan_id, relative_path, content_id, size_bytes, mtime_ns)
-                        VALUES (?, ?, ?, ?, ?)
-                        """,
-                        (
-                            scan_id,
-                            current.relative_path.as_posix(),
-                            content_row_id,
-                            current.size_bytes,
-                            current.mtime_ns,
-                        ),
-                    )
-                self._complete_scan(location.id, scan_id)
+            result = self._publish_inventory(
+                change_set.location,
+                change_set.baseline_scan_id,
+                tuple(change.current for change in change_set.changes if change.current is not None),
+                (),
+                origin="full_scan",
+                keep_last=keep_last,
+            )
         except StaleRefreshError:
             raise
-        except Exception as error:
-            if isinstance(error, RefreshFailure):
-                raise
-            raise RefreshFailure(f"could not apply refresh for {change_set.location.root}") from error
-        return self._scan_summary(scan_id)
+        except (ValueError, RefreshFailure) as error:
+            raise RefreshFailure(f"could not apply refresh: {error}") from error
+        assert result.inventory is not None
+        return result.inventory
+
+    @staticmethod
+    def _validate_retention(keep_last: int | None) -> None:
+        if keep_last is not None:
+            if type(keep_last) is not int:
+                raise TypeError("keep_last must be an integer or None")
+            if not 1 <= keep_last <= 2**63 - 1:
+                raise ValueError("keep_last must be between 1 and 2**63 - 1")
+
+    def _baseline_file(self, snapshot: int | None, path: PurePosixPath) -> FileObservation | None:
+        statement = """SELECT o.relative_path, o.size_bytes, o.mtime_ns, c.algorithm, c.digest,
+                      l.id, l.root_path
+               FROM file_observations o JOIN content c ON c.id=o.content_id
+               JOIN scan_runs s ON s.id=o.scan_id JOIN locations l ON l.id=s.location_id
+               WHERE o.scan_id=? AND o.relative_path = ?"""
+        with closing(self._connection.execute(statement, (snapshot, path.as_posix()))) as cursor:
+            row = cursor.fetchone()
+        if row is None and os.name == "nt":
+            with closing(
+                self._connection.execute(statement + " COLLATE archiver_path_key", (snapshot, path.as_posix()))
+            ) as cursor:
+                row = cursor.fetchone()
+        if row is None:
+            return None
+        return FileObservation(
+            Location(int(row["id"]), Path(row["root_path"])),
+            PurePosixPath(row["relative_path"]),
+            ContentId(row["algorithm"], row["digest"]),
+            int(row["size_bytes"]),
+            int(row["mtime_ns"]),
+        )
+
+    def prepare_file_update(
+        self,
+        root: Path,
+        *,
+        paths: Path | Collection[Path] = (),
+        remove_paths: Collection[PurePosixPath] = (),
+        verify_hashes: bool = False,
+    ) -> InventoryChanges:
+        """Observe selected files against one baseline; never enumerate the root or write."""
+        if type(verify_hashes) is not bool:
+            raise TypeError("verify_hashes must be bool")
+        if self._connection.in_transaction:
+            raise RefreshFailure("cannot prepare inventory inside an existing transaction")
+        # Inspect the original root before resolving away any symlink ancestors.
+        for ancestor in (root, *root.parents):
+            if ancestor.is_symlink() or ancestor.is_junction():
+                raise ValueError("root must not traverse symbolic links or junctions")
+        canonical_root = self._canonical_root(root)
+        selected = (paths,) if isinstance(paths, Path) else tuple(paths)
+        validated: list[tuple[Path, PurePosixPath, bool]] = []
+        for supplied in selected:
+            absolute, relative = targeted_path(canonical_root, supplied)
+            if self._is_catalog_file(absolute) or not absolute.is_file():
+                raise ValueError("selected path must be a regular non-catalog file")
+            validated.append((absolute, relative, False))
+        for relative in remove_paths:
+            if not isinstance(relative, PurePosixPath):
+                raise TypeError("removal paths must be PurePosixPath values")
+            self._validated_relative_path(relative)
+            absolute, normalized = targeted_path(canonical_root, Path(relative.as_posix()))
+            if self._is_catalog_file(absolute):
+                raise ValueError("cannot remove catalog database artifacts")
+            validated.append((absolute, normalized, True))
+        seen: set[str] = set()
+        for _, relative, _ in validated:
+            key = os.path.normcase(relative.as_posix())
+            if key in seen:
+                raise ValueError("duplicate or conflicting inventory paths")
+            seen.add(key)
+        validated.sort(key=lambda item: item[1].parts)
+        # Fetch only selected baseline records in a single consistent read scope.
+        # Release the read transaction before hashing, allowing other writers.
+        self._connection.execute("BEGIN").close()
+        try:
+            location = self._location_for_canonical_root(canonical_root) or Location(None, canonical_root)
+            snapshot = None if location.id is None else self._current_scan_id(location.id)
+            revision = InventoryRevision(self.catalog_uuid, canonical_root, snapshot)
+            previous = [self._baseline_file(snapshot, relative) for _, relative, _ in validated]
+            self._connection.commit()
+        except BaseException:
+            self._connection.rollback()
+            raise
+        upserts: list[FileObservation] = []
+        removals: list[PurePosixPath] = []
+        for (absolute, relative, removing), prior in zip(validated, previous, strict=True):
+            if prior is not None:
+                relative = prior.relative_path
+            if removing:
+                if prior is None:
+                    raise ValueError(f"removal is not in the baseline: {relative}")
+                removals.append(relative)
+            elif prior is None:
+                upserts.append(self._hashed_observation(absolute, location, relative))
+            else:
+                current, _ = self._reconcile_existing_path(absolute, location, prior, verify_hashes=verify_hashes)
+                upserts.append(current)
+        return InventoryChanges(location, revision, tuple(upserts), tuple(removals))
+
+    def apply_inventory_changes(
+        self,
+        changes: InventoryChanges,
+        *,
+        keep_last: int | None = 2,
+    ) -> InventoryUpdateResult:
+        """Publish prepared targeted changes; keep two successes unless overridden."""
+        if not isinstance(changes, InventoryChanges):
+            raise TypeError("changes must be prepared InventoryChanges")
+        revision = changes.baseline
+        if revision._catalog_uuid != self.catalog_uuid or revision._root != changes.location.root:
+            raise StaleRefreshError("inventory changes belong to a different catalog or location")
+        return self._publish_inventory(
+            changes.location,
+            revision._snapshot_id,
+            changes._upserts,
+            changes._removals,
+            origin="targeted_update",
+            keep_last=keep_last,
+        )
+
+    def _publish_inventory(
+        self,
+        location: Location,
+        baseline: int | None,
+        upserts: tuple[FileObservation, ...],
+        removals: tuple[PurePosixPath, ...],
+        *,
+        origin: str,
+        keep_last: int | None,
+    ) -> InventoryUpdateResult:
+        self._validate_retention(keep_last)
+        if self._connection.in_transaction:
+            raise RefreshFailure("cannot publish inventory inside an existing transaction")
+        paths: set[str] = set()
+        for relative in (*[item.relative_path for item in upserts], *removals):
+            self._validated_relative_path(relative)
+            key = os.path.normcase(relative.as_posix())
+            if key in paths:
+                raise ValueError("duplicate or conflicting inventory paths")
+            paths.add(key)
+        for item in upserts:
+            if item.location != location or type(item.size_bytes) is not int or item.size_bytes < 0:
+                raise ValueError("invalid inventory observation location or size")
+            if type(item.mtime_ns) is not int or not isinstance(item.content_id, ContentId):
+                raise ValueError("invalid inventory observation metadata")
+        began = False
+        try:
+            self._connection.execute("BEGIN IMMEDIATE").close()
+            began = True
+            existing = self._location_for_canonical_root(location.root)
+            current = None
+            if existing is not None:
+                assert existing.id is not None
+                current = self._current_scan_id(existing.id)
+            if current != baseline or (location.id is not None and (existing is None or existing.id != location.id)):
+                raise StaleRefreshError("inventory baseline no longer matches catalog current state")
+            if origin == "targeted_update" and not upserts and not removals:
+                scan = None if existing is None else execute_current_scan(self._connection, existing)
+                result = InventoryUpdateResult(
+                    InventoryRevision(self.catalog_uuid, location.root, current),
+                    None if scan is None else scan.origin,
+                    0,
+                    0,
+                    0,
+                    None if current is None else self._scan_summary(current),
+                    None,
+                )
+                self._connection.commit()
+                return result
+            if existing is None:
+                cursor = self._connection.execute("INSERT INTO locations(root_path) VALUES (?)", (str(location.root),))
+                assert cursor.lastrowid is not None
+                existing = Location(int(cursor.lastrowid), location.root)
+            assert existing.id is not None
+            replaced = 0
+            for item in upserts if origin == "targeted_update" else ():
+                prior = self._baseline_file(baseline, item.relative_path)
+                if prior is not None:
+                    if prior.relative_path != item.relative_path:
+                        raise ValueError("upsert aliases an existing baseline path")
+                    replaced += 1
+            for relative in removals:
+                prior = self._baseline_file(baseline, relative)
+                if prior is None or prior.relative_path != relative:
+                    raise ValueError("removal must identify a baseline path exactly")
+            snapshot = self._insert_running_scan(existing.id, origin)
+            self._connection.execute("DELETE FROM inventory_affected").close()
+            self._connection.executemany(
+                "INSERT INTO inventory_affected VALUES (?)", ((path,) for path in paths)
+            ).close()
+            if origin == "targeted_update":
+                self._connection.execute(
+                    """INSERT INTO file_observations(scan_id, relative_path, content_id, size_bytes, mtime_ns)
+                       SELECT ?, relative_path, content_id, size_bytes, mtime_ns FROM file_observations o
+                       WHERE scan_id=? AND NOT EXISTS
+                       (SELECT 1 FROM inventory_affected a WHERE a.path=o.relative_path COLLATE archiver_path_key)""",
+                    (snapshot, baseline),
+                ).close()
+            for item in upserts:
+                content = self._get_or_create_content(item.content_id, item.size_bytes)
+                self._connection.execute(
+                    """INSERT INTO file_observations(scan_id, relative_path, content_id, size_bytes, mtime_ns)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (snapshot, item.relative_path.as_posix(), content, item.size_bytes, item.mtime_ns),
+                ).close()
+            self._connection.execute("DELETE FROM inventory_affected").close()
+            self._complete_scan(existing.id, snapshot)
+            retention = None
+            if keep_last is not None:
+                parameters = {"location_id": existing.id, "keep_last": keep_last, "include_failed": 0}
+                retention = self._history_prune_summary(location.root, parameters, dry_run=False)
+                self._delete_history(parameters, retention)
+            result = InventoryUpdateResult(
+                InventoryRevision(self.catalog_uuid, location.root, snapshot),
+                origin,
+                len(upserts) - replaced,
+                replaced,
+                len(removals),
+                self._scan_summary(snapshot),
+                retention,
+            )
+            self._connection.commit()
+            began = False
+            return result
+        except BaseException as error:
+            if began:
+                self._connection.rollback()
+            if isinstance(error, sqlite3.Error):
+                raise RefreshFailure("could not publish inventory") from error
+            raise
 
     def add_content_tag(self, content_id: ContentId, tag: str, provenance: TagProvenance) -> bool:
         """Add one active assertion, returning whether catalog state changed."""
@@ -865,32 +1022,7 @@ class Catalog:
                 assert location.id is not None
                 parameters = {"location_id": location.id, "keep_last": keep_last, "include_failed": int(include_failed)}
                 summary = self._history_prune_summary(canonical_root, parameters, dry_run=dry_run)
-                with closing(
-                    self._connection.execute(
-                        _HISTORY_RETENTION_CTE
-                        + """
-                    SELECT 1 FROM locations
-                    WHERE current_scan_id IN (SELECT id FROM candidates) LIMIT 1
-                    """,
-                        parameters,
-                    )
-                ) as cursor:
-                    if cursor.fetchone() is not None:
-                        raise HistoryPruningError("pruning would remove a referenced current scan")
-                if not dry_run:
-                    for statement, expected in (
-                        (
-                            "DELETE FROM file_observations WHERE scan_id IN (SELECT id FROM candidates)",
-                            summary.observations_to_remove,
-                        ),
-                        ("DELETE FROM scan_runs WHERE id IN (SELECT id FROM candidates)", summary.scans_to_remove),
-                    ):
-                        self._connection.execute(_HISTORY_RETENTION_CTE + statement, parameters).close()
-                        with closing(self._connection.execute("SELECT changes()")) as cursor:
-                            row = cursor.fetchone()
-                            assert row is not None
-                            if int(row[0]) != expected:
-                                raise HistoryPruningError("history deletion count did not match its transaction report")
+                self._delete_history(parameters, summary, dry_run=dry_run)
             self._connection.commit()
             began = False
             return summary
@@ -900,6 +1032,41 @@ class Catalog:
             if isinstance(error, sqlite3.Error):
                 raise HistoryPruningError(f"could not prune history for {canonical_root}") from error
             raise
+
+    def _delete_history(
+        self,
+        parameters: dict[str, int],
+        summary: PruneHistorySummary,
+        *,
+        dry_run: bool = False,
+    ) -> None:
+        with closing(
+            self._connection.execute(
+                _HISTORY_RETENTION_CTE
+                + """
+            SELECT 1 FROM locations
+            WHERE current_scan_id IN (SELECT id FROM candidates) LIMIT 1
+            """,
+                parameters,
+            )
+        ) as cursor:
+            if cursor.fetchone() is not None:
+                raise HistoryPruningError("pruning would remove a referenced current scan")
+        if dry_run:
+            return
+        for statement, expected in (
+            (
+                "DELETE FROM file_observations WHERE scan_id IN (SELECT id FROM candidates)",
+                summary.observations_to_remove,
+            ),
+            ("DELETE FROM scan_runs WHERE id IN (SELECT id FROM candidates)", summary.scans_to_remove),
+        ):
+            self._connection.execute(_HISTORY_RETENTION_CTE + statement, parameters).close()
+            with closing(self._connection.execute("SELECT changes()")) as cursor:
+                row = cursor.fetchone()
+                assert row is not None
+                if int(row[0]) != expected:
+                    raise HistoryPruningError("history deletion count did not match its transaction report")
 
     def _history_prune_summary(self, root: Path, parameters: dict[str, int], *, dry_run: bool) -> PruneHistorySummary:
         with closing(
@@ -973,23 +1140,6 @@ class Catalog:
         ).fetchone()
         return None if row is None else Location(id=int(row["id"]), root=Path(str(row["root_path"])))
 
-    def _location_for_refresh_apply(self, change_set: RefreshChangeSet) -> Location:
-        """Return the persisted location for an application transaction."""
-        root = change_set.location.root
-        row = self._connection.execute(
-            "SELECT id, root_path FROM locations WHERE root_path = ?", (str(root),)
-        ).fetchone()
-        if row is None:
-            if change_set.location.id is not None:
-                raise StaleRefreshError("refresh location no longer exists in the catalog")
-            cursor = self._connection.execute("INSERT INTO locations (root_path) VALUES (?)", (str(root),))
-            assert cursor.lastrowid is not None
-            return Location(id=int(cursor.lastrowid), root=root)
-        location = Location(id=int(row["id"]), root=Path(str(row["root_path"])))
-        if change_set.location.id is not None and change_set.location.id != location.id:
-            raise StaleRefreshError("refresh location no longer matches the catalog")
-        return location
-
     def _current_scan_id(self, location_id: int) -> int | None:
         row = self._connection.execute("SELECT current_scan_id FROM locations WHERE id = ?", (location_id,)).fetchone()
         if row is None:
@@ -997,10 +1147,10 @@ class Catalog:
         value = row["current_scan_id"]
         return None if value is None else int(value)
 
-    def _insert_running_scan(self, location_id: int) -> int:
+    def _insert_running_scan(self, location_id: int, origin: str = "full_scan") -> int:
         cursor = self._connection.execute(
-            "INSERT INTO scan_runs (location_id, started_at_ns, status) VALUES (?, ?, 'running')",
-            (location_id, time_ns()),
+            "INSERT INTO scan_runs (location_id, started_at_ns, status, origin) VALUES (?, ?, 'running', ?)",
+            (location_id, time_ns(), origin),
         )
         assert cursor.lastrowid is not None
         return int(cursor.lastrowid)

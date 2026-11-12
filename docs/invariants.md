@@ -13,8 +13,8 @@ These properties are intended to remain true across implementations and refactor
 
 5. **Cataloging is read-only unless explicitly stated otherwise.** A scan must not modify, rename, move, delete, or rewrite source files.
 6. **Filesystem metadata is observational.** Size, mtime, inode, device, and path may help describe or accelerate operations, but they are not content identity.
-7. **Current state comes only from successful observations.** A failed or incomplete scan must not replace the last successful state.
-8. **Historical scan identity is preserved.** Records must make it possible to distinguish observations made by different scans.
+7. **Current state comes only from successful observations.** A failed or incomplete scan or targeted publication must not replace the last committed inventory.
+8. **Historical scan identity is preserved.** Retained snapshots remain immutable and distinguishable. Snapshot origin distinguishes full scans from targeted updates; inherited snapshot membership must not be described as a fresh observation.
 9. **Path representation is scoped to a location.** A relative path is meaningful only together with its location/root.
 
 ## Archive authority
@@ -58,3 +58,15 @@ assertion/retraction/provenance history survive even if their last historical
 path observation is removed (1, 15). No automatic retention or source mutation
 is implied. Existing stream pinning survives refresh but cannot preserve rows
 that a caller explicitly prunes; pruned duplicate-member reads fail clearly.
+
+## Targeted inventory publication — 2026-11-12
+
+Plan 005.1 extends current state to successful targeted publications assembled
+from a pinned prior inventory plus selected observations/removals. Inventory
+means known file instances, not guaranteed directory completeness. Failed work
+cannot publish or prune committed state. Explicitly selected publication retention
+may atomically prune superseded snapshots, preserving retained identities, all
+content identities, tags, retractions, and provenance. Default targeted retention
+is two successful snapshots; existing full-scan defaults remain keep-all.
+Database-only registration/removal remains read-only for physical source files
+and grants no managed-storage authority. Existing pruned-reader limits apply.

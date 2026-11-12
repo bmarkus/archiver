@@ -76,7 +76,7 @@ def test_cli_tagging_preserves_source_bytes_and_metadata(tmp_path: Path, capsys:
     assert (source.read_bytes(), source.stat().st_mtime_ns, source.stat().st_mode) == before
 
 
-def test_cli_migrate_is_explicit_and_idempotent(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_cli_legacy_migration_requires_rebuild(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     root = tmp_path / "root"
     root.mkdir()
     source = root / "source.bin"
@@ -93,11 +93,11 @@ def test_cli_migrate_is_explicit_and_idempotent(tmp_path: Path, capsys: pytest.C
     connection.close()
 
     assert main(["catalog", "info", str(root)]) == 1
-    assert "requires migration" in capsys.readouterr().err
-    assert main(["catalog", "migrate", str(root)]) == 0
-    assert "Catalog migrated" in capsys.readouterr().out
-    assert main(["catalog", "migrate", str(root)]) == 0
-    assert "Catalog already current" in capsys.readouterr().out
+    assert "explicit rebuild" in capsys.readouterr().err
+    before = database_path.read_bytes()
+    assert main(["catalog", "migrate", str(root)]) == 1
+    assert "explicit rebuild" in capsys.readouterr().err
+    assert database_path.read_bytes() == before
     assert (source.read_bytes(), source.stat().st_mtime_ns, source.stat().st_mode) == source_before
 
 

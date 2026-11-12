@@ -2,7 +2,16 @@
 
 Plans record the evolution of Archiver's design and implementation.
 
-**Active plan:** None.
+**Active plan:** None. Plan 005.2 remains inactive.
+
+**Implemented (2026-11-12):** [005.1 — Targeted Catalog Updates and Inventory Retention](005.1-targeted-catalog-updates.md)
+adds targeted registration/replacement/removal, snapshot-copying publication,
+schema 3 origin tracking, and atomic retention defaulting to two successes for
+targeted updates. Domain/invariant updates and acceptance review are complete.
+Validation: 366 passed, 6 platform symlink skips; Ruff lint/format and mypy passed.
+The [005 umbrella](005-archiver-foundation.md) is partially implemented; remaining
+children require their own plans and activation. Earlier archive-reservation
+and no-implementation statements below are historical.
 
 **Implemented (2026-11-08):** [002.3 — Catalog Scan History Pruning](002.3-catalog-scan-history-pruning.md)
 adds explicit transactional retention, per-scan API/CLI summaries, and opt-in
@@ -87,6 +96,8 @@ subplans; this does not retroactively rewrite earlier implementation outcomes.
 
 | Sequence | Plan | Status | Parent | Summary |
 | --- | --- | --- | --- | --- |
+| 005 | [Archiver Foundation](005-archiver-foundation.md) | In progress; 005.1 completed | - | Catalog prerequisites, one-way sync, and local deduplication in six gated children. |
+| 005.1 | [Targeted Catalog Updates and Inventory Retention](005.1-targeted-catalog-updates.md) | Implemented; awaiting review | 005 | Snapshot-copying updates behind a publication boundary; retain two managed snapshots by default. |
 | 001 | [Catalog Foundation](001-catalog-foundation.md) | Implemented (reviewed) | - | SQLite-backed read-only cataloging, current state, and duplicate discovery. |
 | 001.1 | [Streaming Catalog History Query APIs](001.1-streaming-history-query-apis.md) | Implemented (reviewed) | 001 | Typed, streaming scan and observation history for debugging and exploration. |
 | 001.2 | [Pandas DataFrame Adapters](001.2-pandas-dataframe-adapters.md) | Implemented (reviewed) | 001 | Flat DataFrame adapters for typed current, history, and duplicate-group query results. |

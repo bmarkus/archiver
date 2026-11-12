@@ -21,9 +21,18 @@ def _setup(root: Path) -> Path:
             catalog.scan_directory(root, excluded_directories=(root / ".archiver",))
         with catalog._connection:
             catalog._connection.execute("UPDATE scan_runs SET started_at_ns=0, completed_at_ns=0")
-            catalog._connection.execute("INSERT INTO scan_runs VALUES(0,1,0,0,'failed')")
-            catalog._connection.execute("INSERT INTO scan_runs VALUES(6,1,0,NULL,'running')")
-            catalog._connection.execute("INSERT INTO scan_runs VALUES(7,1,0,0,'failed')")
+            catalog._connection.execute(
+                "INSERT INTO scan_runs(id, location_id, started_at_ns, completed_at_ns, status) "
+                "VALUES(0,1,0,0,'failed')"
+            )
+            catalog._connection.execute(
+                "INSERT INTO scan_runs(id, location_id, started_at_ns, completed_at_ns, status) "
+                "VALUES(6,1,0,NULL,'running')"
+            )
+            catalog._connection.execute(
+                "INSERT INTO scan_runs(id, location_id, started_at_ns, completed_at_ns, status) "
+                "VALUES(7,1,0,0,'failed')"
+            )
     return database
 
 

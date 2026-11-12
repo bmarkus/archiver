@@ -39,7 +39,7 @@ Low-level initializer for an existing SQLite connection; enables foreign keys an
 create(database_path: Path) -> Catalog
 ```
 
-Create a new schema-version-2 catalog at an unused path. The parent directory must exist; an existing database is rejected.
+Create a new schema-version-3 catalog at an unused path. The parent directory must exist; an existing database is rejected.
 
 ### `open`
 
@@ -47,7 +47,7 @@ Create a new schema-version-2 catalog at an unused path. The parent directory mu
 open(database_path: Path) -> Catalog
 ```
 
-Open an existing schema-version-2 catalog after validation. Version 1 requires explicit migration; unsupported or invalid databases are rejected.
+Open an existing schema-version-3 catalog after validation. Versions 1 and 2 require an explicit rebuild in a separate database; unsupported or invalid databases are rejected.
 
 ### `migrate`
 
@@ -55,7 +55,7 @@ Open an existing schema-version-2 catalog after validation. Version 1 requires e
 migrate(database_path: Path) -> bool
 ```
 
-Explicitly migrate a version-1 catalog to version 2. Return `True` if migrated, `False` if already current; preserve content, observations, and catalog UUID.
+Validate a version-3 catalog and return `False` (already current). Versions 1 and 2 are rejected without writes, with explicit rebuild guidance. Rescanning recovers file inventory, not user tags or provenance. Never overwrite an old catalog to rebuild it.
 
 ### `close`
 
@@ -95,7 +95,7 @@ Persistent catalog UUID, read from metadata.
 schema_version: int
 ```
 
-Persistent database schema version, currently 2.
+Persistent database schema version, currently 3.
 
 ### `database_path`
 
@@ -110,7 +110,7 @@ Canonical absolute path of the SQLite database.
 ### `scan_directory`
 
 ```python
-scan_directory(root: Path, *, verify_hashes: bool=False, excluded_directories: Collection[Path]=(), progress_callback: Callable[[ScanProgress], None] | None=None) -> ScanSummary
+scan_directory(root: Path, *, verify_hashes: bool=False, keep_last: int | None=None, excluded_directories: Collection[Path]=(), progress_callback: Callable[[ScanProgress], None] | None=None) -> ScanSummary
 ```
 
 Reconcile the source and atomically apply its observations. Return the new successful scan summary; source files remain unchanged. Exclusions are directory paths, and the optional callback receives completed-file progress (observed sizes, not bytes physically read). Default refresh reuses matching metadata; `verify_hashes=True` hashes every included regular file. Both modes preserve exclusions, symlink rules, and failure atomicity.
@@ -126,7 +126,7 @@ Read the filesystem and compare it with current observations without writing cat
 ### `apply_refresh`
 
 ```python
-apply_refresh(change_set: RefreshChangeSet) -> ScanSummary
+apply_refresh(change_set: RefreshChangeSet, *, keep_last: int | None=None) -> ScanSummary
 ```
 
 Atomically publish a reconciled change set after checking its catalog baseline. Return the successful scan summary; a stale baseline raises `StaleRefreshError`. Does not reread or mutate source files.
@@ -432,3 +432,84 @@ Retired result envelopes: `CurrentFileSearch`, `TagAwareCurrentFileSearch`,
 types. The tuple-oriented `duplicate_groups_frame` adapter is also retired.
 Historical notebooks explicitly identify their required frozen revision;
 current tutorials and examples use the supported surface.
+
+
+## Targeted inventory updates
+
+For an executable walkthrough using temporary files, see the
+[Plan 005.1 public tutorial](../notebooks/public/plan-005.1-targeted-catalog-updates.ipynb).
+
+### `prepare_file_update`
+
+```python
+prepare_file_update(root: Path, *, paths: Path | Collection[Path]=(), remove_paths: Collection[PurePosixPath]=(), verify_hashes: bool=False) -> InventoryChanges
+```
+
+Prepare selected regular-file observations and catalog-only removals without
+writing SQLite or traversing the root. `paths` accepts a single Path or a
+collection, absolute or relative to `root`. Removals are root-relative POSIX
+paths and must exist in the baseline inventory, even if physically deleted.
+Reject duplicate/conflicting paths, case aliases on Windows, out-of-root paths,
+symlink/junction ancestors, and the catalog's database/sidecars. Distinct
+hard-linked names are allowed. Matching metadata reuses cached identity;
+`verify_hashes=True` hashes every supplied file. Cached reads share one pinned
+baseline, and hashing occurs after releasing its read transaction.
+
+### `apply_inventory_changes`
+
+```python
+apply_inventory_changes(changes: InventoryChanges, *, keep_last: int | None=2) -> InventoryUpdateResult
+```
+
+Publish a prepared change set against its opaque catalog/root-scoped revision.
+Callers obtain changes from preparation, not by constructing observations with
+asserted digests. An empty request checks the baseline but creates no snapshot
+and performs no pruning. Every nonempty request creates a successor, including
+unchanged upserts (counted as replacements). Returns `InventoryUpdateResult`:
+`revision`, `origin`, inserted/replaced/removed path counts, full `inventory`
+totals, and optional `retention` counts. Content/tag history survives removals.
+
+Both full and targeted publication acquire a write lock before checking the
+baseline and reject an existing transaction without changing pending work.
+Stale or foreign targeted changes raise `StaleRefreshError`; invalid input raises
+`TypeError`/`ValueError`; database publication failures raise `RefreshFailure`.
+Publication failures roll back the current pointer, new rows, and retention.
+Neither preparation nor publication modifies physical files.
+
+Targeted publication defaults to `keep_last=2`; `None` retains all, and positive
+integers retain that many successful snapshots per root, across both origins.
+Full `scan_directory()` and `apply_refresh()` accept the same option but default
+to keep-all. Retention is part of the publication transaction. Running/failed
+snapshots, other roots, content, and tags are preserved. No VACUUM runs; deleted
+pages are reusable rather than necessarily shrinking the database file.
+
+Close active streams before requesting pruning. Duplicate handles pinned to
+retained snapshots still work; handles for pruned snapshots raise
+`PrunedScanError`. `ScanRun.origin` is `full_scan` or `targeted_update` and is
+available in current, history, and observation-history records and CLI summaries.
+Inventory totals describe known instances, not fresh full-directory observations
+or a coverage guarantee. Inherited snapshot membership is not a new observation.
+Physical changes after observation remain possible; path checks do not lock the
+filesystem. A later full refresh observes the root normally.
+
+```python
+from pathlib import Path, PurePosixPath
+from archiver import Catalog
+
+root = Path("source").resolve()
+with Catalog.create(Path("new-catalog.sqlite")) as catalog:
+    catalog.scan_directory(root)  # keep-all full-scan default
+    changes = catalog.prepare_file_update(root, paths=Path("incoming/file.txt"))
+    result = catalog.apply_inventory_changes(changes)  # two successful snapshots
+    # Retire a catalog instance only; this does not delete the physical file.
+    changes = catalog.prepare_file_update(root, remove_paths=[PurePosixPath("incoming/file.txt")])
+    catalog.apply_inventory_changes(changes)
+    catalog.scan_directory(root, keep_last=2)  # discovers a still-present file again
+```
+
+Initial registration without a prior scan is supported and inventories only
+selected files. Full successor snapshots copy untouched rows inside SQLite:
+O(total inventory size) database work per batch, without rehashing those files.
+This persistence detail is behind the Catalog publication boundary; revision
+internals are opaque. Truly incremental database writes and Archiver operations
+are not implemented by Plan 005.1.

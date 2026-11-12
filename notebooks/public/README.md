@@ -16,7 +16,7 @@ notebook has been reviewed or approved.
 ## Compatibility
 
 Current tutorials: refresh/reconciliation, Plan 004.2 through 004.6, and query/stream
-lifecycle, plus Plan 004.9 duplicate pagination. The Plan 004 query-grammar playground is a standalone conceptual model,
+lifecycle, plus Plan 004.9 duplicate pagination and Plan 005.1 targeted updates. The Plan 004 query-grammar playground is a standalone conceptual model,
 not the production API. The catalog API and query grammar below are authoritative.
 
 Historical tutorials use retired APIs and require a separate frozen checkout:
@@ -51,6 +51,7 @@ the teaching context of their original API; they are not current usage examples.
 | [Plan 004.5 tag and content predicates](plan-004.5-tag-and-content-predicates.ipynb) | Composes exact content and active-tag predicates across current-file queries using the implemented public grammar. |
 | [Plan 004.6 existing read API migration](plan-004.6-existing-read-api-migration.ipynb) | Covers current-file details, catalog-wide content details, active tag vocabulary, retained exact/history reads, and migrated CLI parity. |
 | [Plan 004.9 duplicate pagination](plan-004.9-duplicate-pagination.ipynb) | Fetches groups 11–20 and 91–100 through API/CLI, streams suffixes, and demonstrates refresh shifts and retained scan-pinned handles. |
+| [Plan 005.1 targeted Catalog updates](plan-005.1-targeted-catalog-updates.ipynb) | Registers additions, updates content, retires catalog paths, retains two snapshots, and performs a full refresh in a temporary sandbox. |
 | [Catalog query and stream lifecycle](query-stream-lifecycle.ipynb) | Explains catalogs, reusable queries, lazy cursor-backed streams, independent group/member cursors, retained handles, scan pinning, and cleanup. |
 
 Current references: [Catalog API](../../docs/catalog-api.md) and
@@ -92,3 +93,13 @@ record a notebook review. Validation and review are intentionally separate.
 | Plan 004.6 existing read API migration | No review record | This notebook is the post-implementation tutorial for Plans 004.6a–d; execution and validation are recorded in the implementation plan. |
 | Catalog query and stream lifecycle | **Yes — approved** | The user explicitly reviewed and approved this notebook on 2026-09-30; recorded in [Plan 004.4.1](../../docs/plans/004.4.1-duplicate-group-sorting-and-streaming.md#review-and-completion). |
 | Plan 004.9 duplicate pagination | No review record | All eight code cells passed clean-kernel execution, nbformat validation and output stripping on 2026-11-07; user review is not recorded. |
+
+## Plan 005.1 tutorial — 2026-11-12
+
+[Targeted Catalog updates and snapshot retention](plan-005.1-targeted-catalog-updates.ipynb)
+uses only temporary files and a new schema-3 database. It includes assertions for
+additions, replacements, catalog-only removals, retention of two successful
+snapshots, a subsequent full refresh, close/reopen persistence, keep-all override,
+and cleanup. It contains no Plan 005.2 work. Execution validation is recorded in
+[Plan 005.1](../../docs/plans/005.1-targeted-catalog-updates.md); user review has not
+yet been recorded.

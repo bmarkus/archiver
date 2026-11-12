@@ -156,7 +156,7 @@ usage: archiver catalog [-h] {init,migrate,info,history,prune-history,refresh,sc
 positional arguments:
   {init,migrate,info,history,prune-history,refresh,scan,duplicates,files,tags}
     init                create a catalog without scanning
-    migrate             explicitly migrate an older catalog schema
+    migrate             validate current schema; older catalogs require rebuilding
     info                show catalog and current-scan information
     history             show newest-first scan dates and persisted file/size totals
     prune-history       preview old scan deletion; --apply commits it
@@ -298,3 +298,8 @@ or `VACUUM` occurs. The API offers `catalog.scan_summaries(root)` and
 See the [API](docs/catalog-api.md#prune_history) and
 [CLI reference](docs/catalog-cli.md#scan-history-and-explicit-pruning) for lifecycle
 rules and reporting details.
+
+Targeted Catalog registration and snapshot retention are documented in the
+[Catalog API](docs/catalog-api.md#targeted-inventory-updates). New databases use
+schema 3; versions 1 and 2 require explicit rebuilding in a separate database.
+Rescanning does not recover existing user tags or provenance.

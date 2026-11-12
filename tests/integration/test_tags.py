@@ -18,50 +18,28 @@ def _downgrade_to_v1(database_path: Path) -> None:
     connection.close()
 
 
-def test_explicit_v1_migration_preserves_catalog_identity_and_current_state(tmp_path: Path) -> None:
-    root = tmp_path / "root"
-    root.mkdir()
-    source = root / "entry.txt"
-    source.write_bytes(b"entry")
-    database_path = tmp_path / "catalog.sqlite"
-
-    with Catalog.create(database_path) as catalog:
-        catalog.scan_directory(root)
-        catalog_uuid = catalog.catalog_uuid
-        expected = list(catalog.files(root).stream_all())
-    _downgrade_to_v1(database_path)
-
-    with pytest.raises(InvalidCatalogError, match="requires migration"):
-        Catalog.open(database_path)
-
-    assert Catalog.migrate(database_path) is True
-    assert Catalog.migrate(database_path) is False
-    with Catalog.open(database_path) as catalog:
-        assert catalog.schema_version == 2
-        assert catalog.catalog_uuid == catalog_uuid
-        assert list(catalog.files(root).stream_all()) == expected
+@pytest.mark.parametrize("version", [1, 2])
+def test_legacy_catalog_requires_rebuild_without_writes(tmp_path: Path, version: int) -> None:
+    database = tmp_path / "catalog.sqlite"
+    Catalog.create(database).close()
+    if version == 1:
+        _downgrade_to_v1(database)
+    else:
+        with sqlite3.connect(database) as connection:
+            connection.execute("UPDATE catalog_metadata SET schema_version=2")
+    before = database.read_bytes()
+    for operation in (Catalog.open, Catalog.migrate):
+        with pytest.raises(InvalidCatalogError, match="explicit rebuild"):
+            operation(database)
+        assert database.read_bytes() == before
 
 
-def test_failed_migration_rolls_back_version_and_partial_schema(tmp_path: Path) -> None:
-    database_path = tmp_path / "catalog.sqlite"
-    Catalog.create(database_path).close()
-    _downgrade_to_v1(database_path)
-    connection = sqlite3.connect(database_path)
-    connection.execute("CREATE TABLE tags (id INTEGER PRIMARY KEY)")
-    connection.commit()
-    connection.close()
-
-    with pytest.raises(InvalidCatalogError, match="could not migrate catalog"):
-        Catalog.migrate(database_path)
-
-    connection = sqlite3.connect(database_path)
-    version = connection.execute("SELECT schema_version FROM catalog_metadata").fetchone()
-    assertion_table = connection.execute(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'content_tag_assertions'"
-    ).fetchone()
-    connection.close()
-    assert version == (1,)
-    assert assertion_table is None
+def test_current_migration_is_noop(tmp_path: Path) -> None:
+    database = tmp_path / "catalog.sqlite"
+    Catalog.create(database).close()
+    before = database.read_bytes()
+    assert Catalog.migrate(database) is False
+    assert database.read_bytes() == before
 
 
 def test_tagging_duplicate_content_shares_tags_and_preserves_source_metadata(tmp_path: Path) -> None:

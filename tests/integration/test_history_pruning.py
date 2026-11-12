@@ -37,7 +37,7 @@ def _seed(database: Path, root: Path) -> None:
         for scan_id, status in enumerate(statuses, 1):
             # Ties and reversed timestamps deliberately disagree with ID order.
             connection.execute(
-                "INSERT INTO scan_runs VALUES (?, 1, ?, ?, ?)",
+                "INSERT INTO scan_runs(id, location_id, started_at_ns, completed_at_ns, status) VALUES (?, 1, ?, ?, ?)",
                 (scan_id, 0 if scan_id % 2 else 8 - scan_id, None if status == "running" else 0, status),
             )
             if scan_id != 4:  # Empty successful snapshot must still be retained.
@@ -204,7 +204,9 @@ def test_unknown_unscanned_empty_and_only_failed_roots(tmp_path: Path, dry_run: 
         catalog._connection.execute("INSERT INTO locations(id,root_path) VALUES(1,?)", (str(root.resolve()),))
         catalog._connection.commit()
         assert catalog.prune_history(root, include_failed=True, dry_run=dry_run).oldest_retained_scan_id is None
-        catalog._connection.execute("INSERT INTO scan_runs VALUES(1,1,0,0,'failed')")
+        catalog._connection.execute(
+            "INSERT INTO scan_runs(id, location_id, started_at_ns, completed_at_ns, status) VALUES(1,1,0,0,'failed')"
+        )
         catalog._connection.commit()
         summary = catalog.prune_history(root, include_failed=True, dry_run=dry_run)
         assert summary.oldest_retained_scan_id is None and summary.scans_to_remove == 0
