@@ -52,9 +52,10 @@ empty snapshot. Same-database and same-root comparisons are supported.
 `ContentComparison.summary()` returns an immutable `ContentComparisonSummary`
 with `source_content_count`, `target_content_count`, `shared_content_count`,
 `missing_source_content_count`, `target_only_content_count`, and
-`missing_source_size_bytes`. Counts are complete regardless of batch size.
-Missing bytes count each missing identity once; they estimate copy bytes,
-not actual free-space demand.
+`bytes_to_copy`. Counts are complete regardless of batch size.
+`bytes_to_copy` is the file-content bytes needed to copy missing source content
+to the target, counting each missing identity once regardless of duplicate paths.
+It estimates copy bytes, not actual free-space demand.
 
 `batches(*, batch_size: int = 1000, include_present: bool = False)` returns a
 closeable generator of immutable tuples of `ComparedContent`, ordered by full

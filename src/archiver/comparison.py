@@ -240,7 +240,7 @@ class ContentComparison:
             SELECT COUNT(*) AS source_count,
                    (SELECT COUNT(*) FROM target_content) AS target_count,
                    COALESCE(SUM(in_target), 0) AS shared_count,
-                   COALESCE(SUM(CASE WHEN in_target = 0 THEN size_bytes ELSE 0 END), 0) AS missing_bytes
+                   COALESCE(SUM(CASE WHEN in_target = 0 THEN size_bytes ELSE 0 END), 0) AS bytes_to_copy
             FROM classified
         """,
                 self._parameters,
@@ -248,8 +248,8 @@ class ContentComparison:
         ) as cursor:
             row = cursor.fetchone()
         assert row is not None
-        source, target, shared, missing_bytes = (int(value) for value in row)
-        return ContentComparisonSummary(source, target, shared, source - shared, target - shared, missing_bytes)
+        source, target, shared, bytes_to_copy = (int(value) for value in row)
+        return ContentComparisonSummary(source, target, shared, source - shared, target - shared, bytes_to_copy)
 
     def summary(self) -> ContentComparisonSummary:
         """Return complete counts for the captured inventories."""

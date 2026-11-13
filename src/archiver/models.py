@@ -293,14 +293,14 @@ class ComparedContent:
 
 @dataclass(frozen=True, slots=True)
 class ContentComparisonSummary:
-    """Complete distinct-content counts and estimated missing unique bytes."""
+    """Distinct-content counts and bytes needed to copy missing source content to target."""
 
     source_content_count: int
     target_content_count: int
     shared_content_count: int
     missing_source_content_count: int
     target_only_content_count: int
-    missing_source_size_bytes: int
+    bytes_to_copy: int
 
 
 @dataclass(frozen=True, slots=True)

@@ -58,6 +58,7 @@ def test_overlap_representatives_reverse_and_reopen(catalogs: tuple[Catalog, Cat
     target.scan_directory(tr)
     with source.compare_content(target, source_root=sr, target_root=tr) as comparison:
         assert comparison.summary() == ContentComparisonSummary(3, 2, 1, 2, 1, 9)
+        assert comparison.summary().bytes_to_copy == 9
         assert comparison.source_scope.has_inventory
         assert comparison.source_scope.location.root == sr.resolve()
         assert comparison.source_scope.revision == InventoryRevision(source.catalog_uuid, sr.resolve(), 1)
