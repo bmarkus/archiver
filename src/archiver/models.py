@@ -269,6 +269,41 @@ class InventoryRevision:
 
 
 @dataclass(frozen=True, slots=True)
+class ComparisonScope:
+    """One captured catalog/root inventory; Location IDs are catalog-local."""
+
+    catalog_uuid: str
+    root: Path
+    location: Location
+    revision: InventoryRevision
+    has_inventory: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ComparedContent:
+    """One distinct source identity and an unverified candidate source instance."""
+
+    content_id: ContentId
+    size_bytes: int
+    source_relative_path: PurePosixPath
+    source_mtime_ns: int
+    source_instance_count: int
+    in_target: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ContentComparisonSummary:
+    """Complete distinct-content counts and estimated missing unique bytes."""
+
+    source_content_count: int
+    target_content_count: int
+    shared_content_count: int
+    missing_source_content_count: int
+    target_only_content_count: int
+    missing_source_size_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
 class InventoryChanges:
     """Prepared observations; obtain through Catalog.prepare_file_update()."""
 

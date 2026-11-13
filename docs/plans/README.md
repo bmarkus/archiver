@@ -2,7 +2,13 @@
 
 Plans record the evolution of Archiver's design and implementation.
 
-**Active plan:** None. Plan 005.2 remains inactive.
+**Active plan:** None. Plan 005.2 is complete; 005.3 and later children remain inactive.
+
+**Implemented (2026-11-12):** [005.2 — Cross-catalog Content Comparison](005.2-cross-catalog-content-comparison.md)
+adds read-only comparison sessions, complete SQL summaries, and bounded classified
+identity batches for later workspace construction. Schema 3 is unchanged.
+Validation: 416 passed, 6 platform symlink skips; Ruff lint/format and mypy passed.
+No workspace or copy execution was introduced; 005.3 is not activated.
 
 **Implemented (2026-11-12):** [005.1 — Targeted Catalog Updates and Inventory Retention](005.1-targeted-catalog-updates.md)
 adds targeted registration/replacement/removal, snapshot-copying publication,
@@ -98,6 +104,7 @@ subplans; this does not retroactively rewrite earlier implementation outcomes.
 | --- | --- | --- | --- | --- |
 | 005 | [Archiver Foundation](005-archiver-foundation.md) | In progress; 005.1 completed | - | Catalog prerequisites, one-way sync, and local deduplication in six gated children. |
 | 005.1 | [Targeted Catalog Updates and Inventory Retention](005.1-targeted-catalog-updates.md) | Implemented; awaiting review | 005 | Snapshot-copying updates behind a publication boundary; retain two managed snapshots by default. |
+| 005.2 | [Cross-catalog Content Comparison](005.2-cross-catalog-content-comparison.md) | Implemented | 005 | Read-only scoped comparison, complete summaries, and bounded classified batches for future sync manifests. |
 | 001 | [Catalog Foundation](001-catalog-foundation.md) | Implemented (reviewed) | - | SQLite-backed read-only cataloging, current state, and duplicate discovery. |
 | 001.1 | [Streaming Catalog History Query APIs](001.1-streaming-history-query-apis.md) | Implemented (reviewed) | 001 | Typed, streaming scan and observation history for debugging and exploration. |
 | 001.2 | [Pandas DataFrame Adapters](001.2-pandas-dataframe-adapters.md) | Implemented (reviewed) | 001 | Flat DataFrame adapters for typed current, history, and duplicate-group query results. |

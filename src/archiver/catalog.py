@@ -42,6 +42,7 @@ from ._sqlite_query import (
     iter_scan_history,
     iter_scan_summaries,
 )
+from .comparison import ContentComparison
 from .errors import (
     HistoryPruningError,
     InvalidCatalogError,
@@ -186,13 +187,15 @@ def _compare_relative_path_components(left: str, right: str) -> int:
     return (left_parts > right_parts) - (left_parts < right_parts)
 
 
-def _validate_schema_tables(connection: sqlite3.Connection, version: int) -> None:
-    rows = connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+def _validate_schema_tables(connection: sqlite3.Connection, version: int, *, schema: str = "main") -> None:
+    if schema not in ("main", "source_catalog", "target_catalog"):
+        raise ValueError("invalid internal schema alias")
+    rows = connection.execute(f"SELECT name FROM {schema}.sqlite_master WHERE type = 'table'")
     actual = {str(row[0]) for row in rows}
     required = _BASE_SCHEMA_TABLES | (_TAG_SCHEMA_TABLES if version == SCHEMA_VERSION else frozenset())
     missing = sorted(required - actual)
     if version == SCHEMA_VERSION:
-        columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(scan_runs)")}
+        columns = {str(row[1]) for row in connection.execute(f"PRAGMA {schema}.table_info(scan_runs)")}
         if "origin" not in columns:
             raise InvalidCatalogError("catalog schema is missing scan_runs.origin")
     if missing:
@@ -299,6 +302,12 @@ class Catalog:
     def close(self) -> None:
         """Close the SQLite connection."""
         self._connection.close()
+
+    def compare_content(self, target: Catalog, *, source_root: Path, target_root: Path) -> ContentComparison:
+        """Create a read-only scoped comparison; enter it before reading results."""
+        if not isinstance(target, Catalog):
+            raise TypeError("target must be a Catalog")
+        return ContentComparison(self, target, source_root=source_root, target_root=target_root)
 
     def __enter__(self) -> Catalog:
         return self

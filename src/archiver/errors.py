@@ -5,6 +5,10 @@ class InvalidCatalogError(Exception):
     """Raised when a catalog database is missing, invalid, or unsupported."""
 
 
+class ContentComparisonError(Exception):
+    """Raised when a read-only comparison cannot maintain a valid scoped view."""
+
+
 class ScanFailure(Exception):
     """Raised when a directory scan cannot complete successfully."""
 

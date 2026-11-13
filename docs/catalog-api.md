@@ -23,6 +23,89 @@ except `sqlite3.Connection` in the low-level initializer. `create`, `open`, and
 `migrate` are class methods; the other methods operate on a catalog instance.
 Properties are read-only.
 
+## Cross-catalog content comparison
+
+### `compare_content`
+
+```python
+compare_content(target: Catalog, *, source_root: Path, target_root: Path) -> ContentComparison
+```
+
+Create a read-only comparison session over two explicit roots. Roots must be
+accessible directories, and Catalog handles must be open with no pending
+transactions. Enter the session before reading results:
+
+```python
+with source.compare_content(target, source_root=source_root, target_root=target_root) as comparison:
+    summary = comparison.summary()
+    for batch in comparison.batches(batch_size=1000):
+        for row in batch:
+            print(row.content_id, row.source_relative_path)
+```
+
+The session compares distinct `(algorithm, digest)` identities in captured current
+inventories, including targeted publications. Historical content, retired paths,
+and other roots do not contribute. An unregistered/unscanned root has an empty
+known set; `ComparisonScope.has_inventory` distinguishes it from an observed
+empty snapshot. Same-database and same-root comparisons are supported.
+
+`ContentComparison.summary()` returns an immutable `ContentComparisonSummary`
+with `source_content_count`, `target_content_count`, `shared_content_count`,
+`missing_source_content_count`, `target_only_content_count`, and
+`missing_source_size_bytes`. Counts are complete regardless of batch size.
+Missing bytes count each missing identity once; they estimate copy bytes,
+not actual free-space demand.
+
+`batches(*, batch_size: int = 1000, include_present: bool = False)` returns a
+closeable generator of immutable tuples of `ComparedContent`, ordered by full
+algorithm/digest. Each row has `content_id`, `size_bytes`, `source_relative_path`,
+`source_mtime_ns`, `source_instance_count`, and `in_target`. The representative is
+the smallest complete POSIX relative path under SQLite BINARY ordering. Default
+batches contain missing source content; `include_present=True` includes every
+source identity with its presence classification. Batch sizes must be integers
+in `1..2**63-1` (not bool); `include_present` must be bool. A size is an upper bound;
+internal fetches cap batches at 10,000 rows without allocating the requested
+maximum in advance. SQL grouping/sorting can use space proportional to inventory
+size even though Python memory is bounded by a batch.
+
+`source_scope` and `target_scope` expose immutable `ComparisonScope` records:
+`catalog_uuid`, canonical `root`, `location`, opaque `revision`, and
+`has_inventory`. Location IDs are catalog-local metadata; use revisions for
+baseline checks. Existing `ContentId` SHA-256 validation is unchanged. Malformed
+scoped records and contradictory sizes fail clearly, including invalid records
+that would otherwise be omitted from returned batches.
+
+Only one batch iterator may be active. Exhaust it or call its `close()` before
+another traversal. After an early `break`, explicitly close that iterator or
+leave the session context. Closing an iterator releases its cursor; subsequent
+traversals still use the same snapshots. Session `close()` is idempotent and
+context exit closes abandoned iterators, the read transaction, and its dedicated
+connection. Closed sessions cannot be reentered. SQL-backed reads before entry
+or after closure fail. Already returned scope, summary, and batch values remain
+ordinary immutable data. Caller Catalog handles remain open and untouched.
+
+Each catalog is captured independently in a read transaction: the pair is stable,
+but does not represent a globally atomic instant across databases. WAL permits
+concurrent writers while preserving the captured view; rollback journaling may
+block writers until the session closes, subject to SQLite's bounded timeout.
+Close the session before later copy, publication, or retention work. A new
+session captures new committed inventories.
+
+Inputs use readonly SQLite attachments and query-only protection, without schema
+changes. Opening checks UUIDs and available filesystem identity; these checks
+cannot detect every concurrent file replacement or a same-UUID copy substituted
+before the checks. SQLite-managed sidecar/locking activity may occur. No source
+files are scanned, hashed, opened, or changed. Cataloged presence is not physical
+verification, and the selected source path is only a candidate. Comparison does
+not create a workspace, manifest, tags, or snapshots. `ContentComparisonError`
+reports catalog, SQL, consistency, and session errors; wrapped failures preserve
+their cause. Invalid arguments use `TypeError`/`ValueError`. Legacy schemas fail
+with rebuild guidance; rebuilding does not restore tags/provenance.
+
+See the runnable [comparison example](../examples/compare_content.py), which uses
+only temporary files and catalogs, and the step-by-step
+[Plan 005.2 notebook](../notebooks/public/plan-005.2-cross-catalog-content-comparison.ipynb).
+
 ## Lifecycle and properties
 
 ### `__init__`

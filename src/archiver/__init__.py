@@ -1,7 +1,9 @@
 """Content-oriented file cataloging."""
 
 from .catalog import Catalog
+from .comparison import ContentComparison
 from .errors import (
+    ContentComparisonError,
     HistoryPruningError,
     InvalidCatalogError,
     PrunedScanError,
@@ -11,6 +13,9 @@ from .errors import (
     TaggingError,
 )
 from .models import (
+    ComparedContent,
+    ComparisonScope,
+    ContentComparisonSummary,
     ContentId,
     ContentRecord,
     ContentTagAssertion,
@@ -50,6 +55,11 @@ from .query import (
 
 __all__ = [
     "Catalog",
+    "ContentComparison",
+    "ContentComparisonError",
+    "ComparedContent",
+    "ComparisonScope",
+    "ContentComparisonSummary",
     "ContentId",
     "ContentRecord",
     "ContentQuery",
