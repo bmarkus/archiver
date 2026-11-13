@@ -1,10 +1,10 @@
 # Plan 005 — Archiver Foundation
 
-**Status:** In progress — 005.1 and 005.2 implemented; later children inactive.
+**Status:** In progress — 005.1–005.3 implemented; 005.4 and later children inactive.
 
 Parent: None.  
 Created: 2026-11-12.  
-Implemented: 005.1 and 005.2 completed 2026-11-12; remaining children not started.
+Implemented: 005.1 and 005.2 completed 2026-11-12; 005.3 completed 2026-11-13; remaining children not started.
 
 ## Goal
 
@@ -75,12 +75,12 @@ is proposed work and recovery evidence, not an authoritative inventory.
 | --- | --- | --- |
 | [005.1 — Targeted Catalog Updates and Inventory Retention](005.1-targeted-catalog-updates.md) | Snapshot-backed targeted updates, revision and publication boundaries, retention, explicit schema versioning. | Independently validated Catalog behavior and documented observation semantics. |
 | [005.2 — Cross-catalog Content Comparison](005.2-cross-catalog-content-comparison.md) | Stream distinct current content absent from an explicit target location; evaluate SQLite ATTACH internally and provide bounded results for manifest construction. | Bounded Python memory, deterministic results, no source-record changes. |
-| 005.3 — Operation Records and Execution Contract | Managed-root authority, plans/results, temporary sync-workspace lifecycle/statuses, target-side or local operation summaries, interruption and recovery contract. | Concrete manifest, finalization, and recovery contract before filesystem operations. |
+| [005.3 — Operation Records and Execution Contract](005.3-operation-records-and-execution-contract.md) | Managed-root authority, plans/results, temporary sync-workspace lifecycle/statuses, target-side or local operation summaries, interruption and recovery contract. | Concrete manifest, finalization, and recovery contract before filesystem operations. |
 | 005.4 — One-way Synchronization | Verified copying in bounded batches, relative destination paths, deterministic collision policy, database-backed successful-entry ingestion and one final target inventory publication. | Bounded-memory planning/copy/finalization, one successor snapshot, partial-failure reporting, and repeated-sync acceptance tests. |
 | 005.5 — Local Deduplication | Deterministic survivor selection, explicit deletion, verification, and current-inventory removals. | Stale observations cannot alone authorize deletion; successful deletions are reflected in inventory. |
 | 005.6 — Integration and Public Documentation | Cross-feature acceptance review, public examples and documentation. | Every umbrella criterion accounted for and required checks pass. |
 
-005.1 and 005.2 are implemented. No child is currently active. Write
+005.1–005.3 are implemented. No child is currently active. Write
 the remaining child plans before activating their work. Each child includes its
 own tests and documentation; 005.6 does not defer validation from earlier children.
 
@@ -200,6 +200,11 @@ recovery evidence needed for correctness must be explicitly justified.
    Recovery must distinguish an uncommitted attempt from a committed publication
    whose acknowledgement/workspace update was interrupted. Never overwrite or
    delete existing destination files merely to retry an operation.
+   Follow 005.3's explicit recovery transitions: a frozen request can only retry
+   unchanged. Invalidated entries or baselines require explicit superseding plans
+   with new operation IDs, durable bounded evidence handoff and fresh verification
+   of reusable destinations at their existing paths, rather than copying them
+   again. Old IDs are fenced against later publication in the target Catalog.
 7. After confirmed finalization and a consistent terminal summary, remove the
    temporary workspace by default. Retain it on interrupted/failed finalization
    until explicit recovery or discard. Its location/lifetime must be documented
@@ -208,6 +213,10 @@ recovery evidence needed for correctness must be explicitly justified.
    workspace databases/sidecars and in-flight copy artifacts from inventory inputs.
    A workspace is not long-term per-file provenance and is not subject to Catalog
    snapshot pruning. 005.3 will specify safe disposal and compatibility details.
+   A finalized attempt with known outcomes may be cleaned even when its terminal
+   status is failed; a failed finalization or uncertain physical outcome retains
+   evidence. Unresolved artifact cleanup retains the workspace without changing
+   an already committed receipt or inventory result.
 
 One final publication avoids repeated full-inventory copying, but still requires
 space/time for the complete successor snapshot and its SQLite transaction. A
@@ -343,3 +352,58 @@ format, and mypy passed. The public example also ran successfully. See the
 child's acceptance review for coverage and read-only/snapshot limits.
 No workspace, copy engine, or 005.3 work was introduced; later children remain
 inactive and require separate plans and activation.
+
+## 005.3 planning checkpoint — 2026-11-13
+
+[The detailed 005.3 draft](005.3-operation-records-and-execution-contract.md)
+assigns the temporary SQLite sync database's model, manifest/progress storage,
+lifecycle and recovery contract to 005.3. Production manifest construction,
+collision naming, copying, destination verification and bounded final ingestion
+remain in 005.4. Local physical deletion remains in 005.5.
+
+The draft specifies schema-4 minimal operation summaries/receipts and a narrow,
+explicit additive schema-3 migration to preserve existing inventory and tag data.
+This is a planned extension of the earlier rebuild-only compatibility boundary,
+not a rewrite of 005.1's schema-3 behavior: versions 1 and 2 still require explicit
+rebuild, and opening unsupported versions still performs no writes. No permanent
+per-file manifest or second inventory is introduced. Receipt persistence and
+inventory publication share one transaction; actual filesystem execution remains
+outside that transaction. No child is activated by this planning checkpoint.
+
+## 005.3 consistency review amendment — 2026-11-13 (planning only)
+
+The revised child specifies lifecycle transitions and receipt-first recovery,
+immutable frozen requests, explicit supersession and safe evidence handoff, and
+receipt/outcome-based disposal rules. Workspace format 1 owns the placement
+evidence contract, `retained_link_v1`: retain an operation-owned destination-
+filesystem staging file as a witness, place using no-replace hard-link creation,
+and recover uncertain placement only after same-file checks and fresh hashing.
+This is a temporary placement mechanism; it adds no permanent storage layout,
+content identity scheme or duplicate-resolution policy. 005.4 implements and
+tests it and must reject unsupported filesystems before copying; a different
+protocol requires an explicit plan/compatibility amendment. 005.3 validates the
+records and protocol decisions using synthetic evidence, without copying files.
+
+The temporary workspace remains operation-scoped; the target Catalog remains
+the permanent inventory. There is still at most one successor snapshot per
+finalized attempt, and no snapshot for an empty successful-entry set. No source
+deletion, destination overwrite, automatic rebase or automatic full scan is
+introduced. No implementation or activation is authorized by this amendment.
+
+## 005.3 completion checkpoint — 2026-11-13
+
+At the user's explicit activation request, 005.3 implemented bounded temporary
+SQLite workspace storage, explicit authority and lifecycle records, retained-link
+intent/evidence validation, immutable requests, receipt-first recovery decisions,
+publication fencing, evidence handoff and owned-workspace disposal. Schema 4 adds
+minimal permanent operation summaries/receipts; an explicit additive schema-3
+migration preserves inventory, revisions, tags and provenance. Inventory,
+retention and the terminal receipt commit in one Catalog transaction. No permanent
+per-file manifest or second inventory was introduced.
+
+Validation: 454 tests passed, 7 platform symlink skips; Ruff lint/format, mypy,
+the temporary-data example and documentation/diff checks passed. The child's
+outcome maps every acceptance criterion to evidence and records the scope limits.
+The retained-link filesystem adapter, production/replacement manifest planning,
+copy execution and bounded successful-entry ingestion remain 005.4 work. No
+005.4 or physical deduplication work was started. No child is currently active.

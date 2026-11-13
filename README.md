@@ -301,10 +301,17 @@ rules and reporting details.
 
 Targeted Catalog registration and snapshot retention are documented in the
 [Catalog API](docs/catalog-api.md#targeted-inventory-updates). New databases use
-schema 3; versions 1 and 2 require explicit rebuilding in a separate database.
+schema 4; schema 3 supports an explicit, additive `Catalog.migrate()` upgrade that
+preserves inventory and tags. Versions 1 and 2 require explicit rebuilding in a separate database.
 Rescanning does not recover existing user tags or provenance.
 
 Read-only [cross-catalog comparison](docs/catalog-api.md#compare_content) reports
 distinct current content shared with or missing from an explicit target root,
 with complete summaries and bounded identity batches. Try
 `uv run python examples/compare_content.py` for a temporary-data example.
+
+[Operation workspaces](docs/operation-workspaces.md) provide bounded temporary
+SQLite manifests, progress/recovery records and Catalog receipt inspection.
+Try `uv run python examples/operation_workspace.py` for a storage-only example.
+Plan 005.3 supplies these contracts; copying and physical deduplication remain
+unimplemented future work.

@@ -43,6 +43,19 @@ from .models import (
     TagUsage,
     validate_tag_name,
 )
+from .operations import (
+    FinalizationRequest,
+    ManagedRootAuthority,
+    OperationCounts,
+    OperationError,
+    OperationRecord,
+    OperationScope,
+    OperationSpec,
+    PlacementCheck,
+    PlacementEvidence,
+    PlacementIntent,
+    recover_placement,
+)
 from .query import (
     ContentDetailQuery,
     ContentQuery,
@@ -52,8 +65,22 @@ from .query import (
     DuplicateGroupQuery,
     TagVocabularyQuery,
 )
+from .workspace import ManifestEntry, SyncWorkspace
 
 __all__ = [
+    "FinalizationRequest",
+    "ManagedRootAuthority",
+    "OperationCounts",
+    "OperationError",
+    "OperationRecord",
+    "OperationScope",
+    "OperationSpec",
+    "PlacementCheck",
+    "PlacementEvidence",
+    "PlacementIntent",
+    "recover_placement",
+    "ManifestEntry",
+    "SyncWorkspace",
     "Catalog",
     "ContentComparison",
     "ContentComparisonError",

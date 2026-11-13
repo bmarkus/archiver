@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 from collections.abc import Callable, Collection, Iterator
 from contextlib import closing, suppress
+from dataclasses import asdict
 from pathlib import Path, PurePosixPath
 from time import monotonic, time_ns
 from uuid import uuid4
@@ -80,6 +82,21 @@ from .models import (
     TagUsage,
     validate_tag_name,
 )
+from .operations import (
+    OPERATION_SCHEMA,
+    FinalizationRequest,
+    OperationCounts,
+    OperationError,
+    OperationRecord,
+    OperationScope,
+    OperationSpec,
+    canonical,
+    decode_revision,
+    positive,
+    prepare_operation_request,
+    revision_data,
+    safe_root,
+)
 from .query import (
     ContentDetailQuery,
     ContentQuery,
@@ -91,7 +108,7 @@ from .query import (
     duplicate,
 )
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 _TAG_NAME_REGEX_FUNCTION = "archiver_tag_name_regex"
 
 _SCHEMA = """
@@ -160,6 +177,8 @@ ON content_tag_assertions (tag_id, content_id)
 WHERE retracted_at_ns IS NULL;
 """
 
+_SCHEMA += OPERATION_SCHEMA
+
 _BASE_SCHEMA_TABLES = frozenset({"catalog_metadata", "locations", "content", "scan_runs", "file_observations"})
 _TAG_SCHEMA_TABLES = frozenset({"tags", "content_tag_assertions"})
 
@@ -192,14 +211,42 @@ def _validate_schema_tables(connection: sqlite3.Connection, version: int, *, sch
         raise ValueError("invalid internal schema alias")
     rows = connection.execute(f"SELECT name FROM {schema}.sqlite_master WHERE type = 'table'")
     actual = {str(row[0]) for row in rows}
-    required = _BASE_SCHEMA_TABLES | (_TAG_SCHEMA_TABLES if version == SCHEMA_VERSION else frozenset())
+    required = _BASE_SCHEMA_TABLES | (_TAG_SCHEMA_TABLES if version >= 3 else frozenset())
+    if version == 4:
+        required |= {"operations"}
     missing = sorted(required - actual)
-    if version == SCHEMA_VERSION:
+    if version >= 3:
         columns = {str(row[1]) for row in connection.execute(f"PRAGMA {schema}.table_info(scan_runs)")}
         if "origin" not in columns:
             raise InvalidCatalogError("catalog schema is missing scan_runs.origin")
     if missing:
         raise InvalidCatalogError(f"catalog schema is missing required tables: {', '.join(missing)}")
+    if version >= 3:
+        for table, fields in (
+            ("catalog_metadata", "singleton,catalog_uuid,schema_version"),
+            ("locations", "id,root_path,current_scan_id"),
+            ("content", "id,algorithm,digest,size_bytes"),
+            ("scan_runs", "id,location_id,started_at_ns,completed_at_ns,status,origin"),
+            ("file_observations", "id,scan_id,relative_path,content_id,size_bytes,mtime_ns"),
+            ("tags", "id,name"),
+            (
+                "content_tag_assertions",
+                "id,content_id,tag_id,provenance_kind,source_name,source_version,"
+                "source_detail,asserted_at_ns,retracted_at_ns",
+            ),
+        ):
+            connection.execute(f"SELECT {fields} FROM {schema}.{table} LIMIT 0").close()
+    if version == 4:
+        connection.execute(
+            f"SELECT operation_id,spec,status,started_at_ns,completed_at_ns,counts,request_digest,"
+            f"committed_revision FROM {schema}.operations LIMIT 0"
+        ).close()
+        definition = connection.execute(
+            f"SELECT sql FROM {schema}.sqlite_master WHERE type='table' AND name='operations'"
+        ).fetchone()
+        expected = " ".join(OPERATION_SCHEMA.split(";")[0].split())
+        if definition is None or " ".join(str(definition[0]).split()) != expected:
+            raise InvalidCatalogError("catalog operation constraints do not match schema 4")
 
 
 class Catalog:
@@ -223,7 +270,7 @@ class Catalog:
 
     @classmethod
     def create(cls, database_path: Path) -> Catalog:
-        """Create a new schema-version-3 catalog at an unused path."""
+        """Create a new schema-version-4 catalog at an unused path."""
         path = database_path.resolve(strict=False)
         if path.exists():
             raise InvalidCatalogError(f"catalog database already exists: {path}")
@@ -244,9 +291,46 @@ class Catalog:
 
     @classmethod
     def migrate(cls, database_path: Path) -> bool:
-        """Validate a current catalog; legacy versions require an explicit rebuild."""
-        with cls.open(database_path):
-            return False
+        """Explicitly add operation records to schema 3; reject older schemas."""
+        path = database_path.resolve(strict=False)
+        if not path.is_file():
+            raise InvalidCatalogError(f"catalog database does not exist: {path}")
+        connection = sqlite3.connect(f"{path.as_uri()}?mode=rw", uri=True)
+        try:
+            connection.execute("PRAGMA foreign_keys=ON")
+            version_row = connection.execute(
+                "SELECT catalog_uuid, schema_version FROM catalog_metadata WHERE singleton=1"
+            ).fetchone()
+            if version_row is None:
+                raise InvalidCatalogError("catalog metadata is missing")
+            if version_row[1] != 3:
+                connection.close()
+                with cls.open(path):
+                    return False
+            from uuid import UUID
+
+            UUID(version_row[0])
+            _validate_schema_tables(connection, 3)
+            if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise InvalidCatalogError("catalog has broken foreign keys")
+            connection.execute("BEGIN IMMEDIATE")
+            locked_version = connection.execute(
+                "SELECT schema_version FROM catalog_metadata WHERE singleton=1"
+            ).fetchone()
+            if locked_version is None or locked_version[0] != 3:
+                raise InvalidCatalogError("catalog version changed during migration; reopen and retry")
+            # executescript would commit before DDL; execute statements individually.
+            for statement in OPERATION_SCHEMA.split(";"):
+                if statement.strip():
+                    connection.execute(statement)
+            connection.execute("UPDATE catalog_metadata SET schema_version=4 WHERE singleton=1 AND schema_version=3")
+            connection.commit()
+            return True
+        except (sqlite3.Error, ValueError) as error:
+            connection.rollback()
+            raise InvalidCatalogError("could not migrate catalog from schema 3") from error
+        finally:
+            connection.close()
 
     @classmethod
     def open(cls, database_path: Path) -> Catalog:
@@ -268,6 +352,8 @@ class Catalog:
                     f"catalog schema version {version} requires an explicit rebuild in a new database; "
                     "rescanning does not preserve tags or provenance"
                 )
+            if version == 3:
+                raise InvalidCatalogError("catalog schema version 3 requires explicit Catalog.migrate() to schema 4")
             if version != SCHEMA_VERSION:
                 raise InvalidCatalogError(f"unsupported catalog schema version: {version} (expected {SCHEMA_VERSION})")
             _validate_schema_tables(connection, SCHEMA_VERSION)
@@ -302,6 +388,168 @@ class Catalog:
     def close(self) -> None:
         """Close the SQLite connection."""
         self._connection.close()
+
+    def operation(self, operation_id: str) -> OperationRecord | None:
+        """Read an operation summary or receipt by exact ID."""
+        row = self._connection.execute("SELECT * FROM operations WHERE operation_id=?", (operation_id,)).fetchone()
+        if row is None:
+            return None
+        return OperationRecord(
+            OperationSpec._decode(str(row["spec"])),
+            str(row["status"]),
+            int(row["started_at_ns"]),
+            row["completed_at_ns"],
+            OperationCounts(**json.loads(row["counts"])),
+            row["request_digest"],
+            None if row["committed_revision"] is None else decode_revision(json.loads(row["committed_revision"])),
+        )
+
+    def operation_scope(self, root: Path) -> OperationScope:
+        """Capture a read-only operation endpoint and its opaque current revision."""
+        canonical_root = safe_root(root)
+        if self._connection.in_transaction:
+            raise OperationError("cannot capture an operation scope inside a caller transaction")
+        try:
+            self._connection.execute("BEGIN")
+            location = self._location_for_canonical_root(canonical_root)
+            snapshot = None
+            if location is not None:
+                assert location.id is not None
+                snapshot = self._operation_snapshot(location)
+            scope = OperationScope(self.database_path, InventoryRevision(self.catalog_uuid, canonical_root, snapshot))
+            self._connection.rollback()
+            return scope
+        except BaseException:
+            self._connection.rollback()
+            raise
+
+    def operations(self, *, limit: int = 100, offset: int = 0) -> tuple[OperationRecord, ...]:
+        """Read a bounded page ordered by start time and operation UUID."""
+        positive(limit)
+        if type(offset) is not int or not 0 <= offset <= 2**63 - 1:
+            raise ValueError("offset must be a nonnegative SQLite integer")
+        rows = self._connection.execute(
+            "SELECT operation_id FROM operations ORDER BY started_at_ns, operation_id LIMIT ? OFFSET ?", (limit, offset)
+        )
+        result = []
+        for row in rows:
+            record = self.operation(str(row[0]))
+            assert record is not None
+            result.append(record)
+        return tuple(result)
+
+    def _validate_operation_target(self, spec: OperationSpec) -> None:
+        if spec.target.catalog_uuid != self.catalog_uuid or not os.path.samefile(
+            spec.target.database_path, self.database_path
+        ):
+            raise OperationError("operation belongs to another Catalog")
+
+    def _start_operation(self, spec: OperationSpec) -> OperationRecord:
+        self._validate_operation_target(spec)
+        if self._connection.in_transaction:
+            raise OperationError("cannot start an operation inside a caller transaction")
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+            prior = self.operation(spec.operation_id)
+            if prior is not None:
+                if prior.spec != spec or prior.status != "executing":
+                    raise OperationError("operation ID is already used")
+            else:
+                self._connection.execute(
+                    "INSERT INTO operations VALUES (?,?,'executing',?,NULL,?,NULL,NULL)",
+                    (spec.operation_id, spec._json(), time_ns(), canonical(asdict(OperationCounts()))),
+                )
+            self._check_operation_revision(spec)
+            self._connection.commit()
+        except BaseException:
+            self._connection.rollback()
+            raise
+        record = self.operation(spec.operation_id)
+        assert record is not None
+        return record
+
+    def _operation_snapshot(self, location: Location) -> int | None:
+        assert location.id is not None
+        snapshot = self._current_scan_id(location.id)
+        if snapshot is not None:
+            row = self._connection.execute(
+                "SELECT location_id,status,completed_at_ns,origin FROM scan_runs WHERE id=?", (snapshot,)
+            ).fetchone()
+            if (
+                row is None
+                or row["location_id"] != location.id
+                or row["status"] != "completed"
+                or row["completed_at_ns"] is None
+                or row["origin"] not in ("full_scan", "targeted_update")
+            ):
+                raise OperationError("invalid operation inventory pointer")
+        return snapshot
+
+    def _check_operation_revision(self, spec: OperationSpec) -> None:
+        location = self._location_for_canonical_root(spec.target.root)
+        current = None
+        if location is not None:
+            assert location.id is not None
+            current = self._operation_snapshot(location)
+        if current != spec.target.revision._snapshot_id:
+            raise StaleRefreshError("operation target baseline is stale")
+
+    def _fence_operation(self, spec: OperationSpec, *, status: str) -> OperationRecord:
+        """Resolve receipt versus abandonment under the same lock as finalization."""
+        if status not in ("discarded", "superseded"):
+            raise ValueError("invalid fence status")
+        self._validate_operation_target(spec)
+        if self._connection.in_transaction:
+            raise OperationError("cannot fence inside a caller transaction")
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+            prior = self.operation(spec.operation_id)
+            if prior is None or prior.spec != spec:
+                raise OperationError("missing or mismatched operation")
+            if prior.request_digest is None and prior.status == "executing":
+                self._connection.execute(
+                    "UPDATE operations SET status=?,completed_at_ns=? WHERE operation_id=?",
+                    (status, time_ns(), spec.operation_id),
+                )
+            self._connection.commit()
+        except BaseException:
+            self._connection.rollback()
+            raise
+        record = self.operation(spec.operation_id)
+        assert record is not None
+        return record
+
+    def _finalize_operation(self, request: FinalizationRequest, changes: InventoryChanges) -> OperationRecord:
+        """Database-only receipt boundary; no filesystem verification or execution."""
+        if prepare_operation_request(request.spec, request.counts, changes) != request:
+            raise OperationError("finalization request differs from frozen changes")
+        self._validate_operation_target(request.spec)
+        self._publish_inventory(
+            changes.location,
+            changes.baseline._snapshot_id,
+            changes._upserts,
+            changes._removals,
+            origin="targeted_update",
+            keep_last=request.spec.keep_last,
+            operation_request=request,
+        )
+        record = self.operation(request.spec.operation_id)
+        assert record is not None
+        return record
+
+    def _write_operation_receipt(self, request: FinalizationRequest, result: InventoryUpdateResult) -> None:
+        self._connection.execute(
+            """UPDATE operations SET status=?, completed_at_ns=?, counts=?, request_digest=?,
+               committed_revision=? WHERE operation_id=?""",
+            (
+                request.counts.status,
+                time_ns(),
+                canonical(asdict(request.counts)),
+                request.digest,
+                canonical(revision_data(result.revision)),
+                request.spec.operation_id,
+            ),
+        )
 
     def compare_content(self, target: Catalog, *, source_root: Path, target_root: Path) -> ContentComparison:
         """Create a read-only scoped comparison; enter it before reading results."""
@@ -555,6 +803,7 @@ class Catalog:
         *,
         origin: str,
         keep_last: int | None,
+        operation_request: FinalizationRequest | None = None,
     ) -> InventoryUpdateResult:
         self._validate_retention(keep_last)
         if self._connection.in_transaction:
@@ -575,6 +824,19 @@ class Catalog:
         try:
             self._connection.execute("BEGIN IMMEDIATE").close()
             began = True
+            if operation_request is not None:
+                operation_prior = self.operation(operation_request.spec.operation_id)
+                if operation_prior is None or operation_prior.spec != operation_request.spec:
+                    raise OperationError("operation was not started with this scope")
+                if operation_prior.request_digest is not None:
+                    if operation_prior.request_digest != operation_request.digest:
+                        raise OperationError("operation already committed a different request")
+                    assert operation_prior.committed_revision is not None
+                    self._connection.commit()
+                    began = False
+                    return InventoryUpdateResult(operation_prior.committed_revision, None, 0, 0, 0, None, None)
+                if operation_prior.status != "executing":
+                    raise OperationError("operation is fenced against publication")
             existing = self._location_for_canonical_root(location.root)
             current = None
             if existing is not None:
@@ -593,6 +855,8 @@ class Catalog:
                     None if current is None else self._scan_summary(current),
                     None,
                 )
+                if operation_request is not None:
+                    self._write_operation_receipt(operation_request, result)
                 self._connection.commit()
                 return result
             if existing is None:
@@ -647,6 +911,8 @@ class Catalog:
                 self._scan_summary(snapshot),
                 retention,
             )
+            if operation_request is not None:
+                self._write_operation_receipt(operation_request, result)
             self._connection.commit()
             began = False
             return result

@@ -466,7 +466,7 @@ def test_pinned_handles_and_origin_in_cli(tmp_path: Path, capsys: pytest.Capture
 def test_origin_constraint_and_schema_validation(tmp_path: Path) -> None:
     database = tmp_path / "catalog.sqlite"
     with Catalog.create(database) as catalog:
-        assert catalog.schema_version == 3
+        assert catalog.schema_version == 4
         assert catalog._connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         catalog.scan_directory(tmp_path)
         with pytest.raises(sqlite3.IntegrityError):

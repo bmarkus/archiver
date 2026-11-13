@@ -143,7 +143,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     for command, help_text in (
         ("init", "create a catalog without scanning"),
-        ("migrate", "validate current schema; older catalogs require rebuilding"),
+        ("migrate", "explicitly upgrade schema 3; versions 1 and 2 require rebuilding"),
         ("info", "show catalog and current-scan information"),
         ("history", "show newest-first scan dates and persisted file/size totals"),
         ("prune-history", "preview old scan deletion; --apply commits it"),

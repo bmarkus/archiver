@@ -369,7 +369,7 @@ def test_opening_failure_closes_dedicated_connection(
             pass
     with pytest.raises(sqlite3.ProgrammingError, match="closed"):
         connection.execute("SELECT 1")
-    assert source.schema_version == 3 and target.schema_version == 99
+    assert source.schema_version == 4 and target.schema_version == 99
 
 
 def test_wal_publication_and_pruning_preserve_both_snapshots(catalogs: tuple[Catalog, Catalog, Path, Path]) -> None:

@@ -2,7 +2,23 @@
 
 Plans record the evolution of Archiver's design and implementation.
 
-**Active plan:** None. Plan 005.2 is complete; 005.3 and later children remain inactive.
+**Active plan:** None. Plan 005.3 is implemented; 005.4 and later children remain inactive.
+
+**Implemented (2026-11-13):** [005.3 — Operation Records and Execution Contract](005.3-operation-records-and-execution-contract.md)
+adds bounded temporary SQLite workspace storage, authority/lifecycle records,
+retained-link intent/evidence contracts, frozen requests, atomic Catalog receipts,
+recovery/fencing/handoff and safe workspace disposal. Schema 4 supports explicit
+additive schema-3 migration, preserving catalog data. Validation: 454 passed,
+7 platform symlink skips; Ruff lint/format, mypy and the storage-only example passed.
+Awaiting user review. No 005.4 production planning, copying or ingestion started.
+
+**Draft prepared (2026-11-13):** [005.3 — Operation Records and Execution Contract](005.3-operation-records-and-execution-contract.md)
+defines the temporary sync database model, bounded manifest/progress storage,
+explicit authority, operation summaries, and receipt/recovery boundaries.
+Copy execution remains in 005.4; deletion remains in 005.5. No child is activated.
+The 2026-11-13 consistency revision resolves recovery transitions, retained-witness
+placement evidence, frozen-request replacement and receipt-based cleanup rules;
+the parent records the matching contract and platform-support boundary.
 
 **Implemented (2026-11-12):** [005.2 — Cross-catalog Content Comparison](005.2-cross-catalog-content-comparison.md)
 adds read-only comparison sessions, complete SQL summaries, and bounded classified
@@ -102,9 +118,10 @@ subplans; this does not retroactively rewrite earlier implementation outcomes.
 
 | Sequence | Plan | Status | Parent | Summary |
 | --- | --- | --- | --- | --- |
-| 005 | [Archiver Foundation](005-archiver-foundation.md) | In progress; 005.1 completed | - | Catalog prerequisites, one-way sync, and local deduplication in six gated children. |
+| 005 | [Archiver Foundation](005-archiver-foundation.md) | In progress; 005.1–005.3 completed | - | Catalog prerequisites, one-way sync, and local deduplication in six gated children. |
 | 005.1 | [Targeted Catalog Updates and Inventory Retention](005.1-targeted-catalog-updates.md) | Implemented; awaiting review | 005 | Snapshot-copying updates behind a publication boundary; retain two managed snapshots by default. |
 | 005.2 | [Cross-catalog Content Comparison](005.2-cross-catalog-content-comparison.md) | Implemented | 005 | Read-only scoped comparison, complete summaries, and bounded classified batches for future sync manifests. |
+| 005.3 | [Operation Records and Execution Contract](005.3-operation-records-and-execution-contract.md) | Implemented; awaiting review | 005 | Temporary sync workspace model, bounded records, authority, summaries, and atomic receipt/recovery contract; no copy/delete execution. |
 | 001 | [Catalog Foundation](001-catalog-foundation.md) | Implemented (reviewed) | - | SQLite-backed read-only cataloging, current state, and duplicate discovery. |
 | 001.1 | [Streaming Catalog History Query APIs](001.1-streaming-history-query-apis.md) | Implemented (reviewed) | 001 | Typed, streaming scan and observation history for debugging and exploration. |
 | 001.2 | [Pandas DataFrame Adapters](001.2-pandas-dataframe-adapters.md) | Implemented (reviewed) | 001 | Flat DataFrame adapters for typed current, history, and duplicate-group query results. |

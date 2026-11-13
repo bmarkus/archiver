@@ -216,7 +216,7 @@ def test_failed_refresh_and_read_failures_preserve_paged_state_and_sources(
         assert {p: (p.read_bytes(), p.stat().st_mtime_ns, p.stat().st_mode) for p in root.rglob("*.bin")} == before
     with Catalog.open(database) as reopened:
         assert reopened.duplicates(root).offset(1).limit(2).fetch() == expected
-        assert reopened.schema_version == 3
+        assert reopened.schema_version == 4
 
 
 def test_unknown_unscanned_and_empty_pages_keep_zero_summary(tmp_path: Path) -> None:

@@ -123,7 +123,7 @@ Low-level initializer for an existing SQLite connection; enables foreign keys an
 create(database_path: Path) -> Catalog
 ```
 
-Create a new schema-version-3 catalog at an unused path. The parent directory must exist; an existing database is rejected.
+Create a new schema-version-4 catalog at an unused path. The parent directory must exist; an existing database is rejected.
 
 ### `open`
 
@@ -131,7 +131,7 @@ Create a new schema-version-3 catalog at an unused path. The parent directory mu
 open(database_path: Path) -> Catalog
 ```
 
-Open an existing schema-version-3 catalog after validation. Versions 1 and 2 require an explicit rebuild in a separate database; unsupported or invalid databases are rejected.
+Open an existing schema-version-4 catalog after validation. Schema 3 requires explicit `migrate()`. Versions 1 and 2 require an explicit rebuild in a separate database; unsupported or invalid databases are rejected. Opening never migrates implicitly.
 
 ### `migrate`
 
@@ -139,7 +139,12 @@ Open an existing schema-version-3 catalog after validation. Versions 1 and 2 req
 migrate(database_path: Path) -> bool
 ```
 
-Validate a version-3 catalog and return `False` (already current). Versions 1 and 2 are rejected without writes, with explicit rebuild guidance. Rescanning recovers file inventory, not user tags or provenance. Never overwrite an old catalog to rebuild it.
+Explicitly upgrade validated schema 3 to 4 transactionally and return `True`.
+The additive upgrade preserves UUID, inventory revisions, observations, tags and
+provenance and adds operation-summary/receipt storage. A failed upgrade rolls back.
+Return `False` for valid schema 4. Versions 1 and 2 are rejected without writes,
+with explicit rebuild guidance. Rescanning recovers file inventory, not user tags
+or provenance. Never overwrite an old catalog to rebuild it.
 
 ### `close`
 
@@ -179,7 +184,7 @@ Persistent catalog UUID, read from metadata.
 schema_version: int
 ```
 
-Persistent database schema version, currently 3.
+Persistent database schema version, currently 4.
 
 ### `database_path`
 
@@ -188,6 +193,45 @@ database_path: Path
 ```
 
 Canonical absolute path of the SQLite database.
+
+## Operation inspection (Plan 005.3)
+
+### `operation_scope`
+
+```python
+operation_scope(root: Path) -> OperationScope
+```
+
+Capture the canonical database path and opaque current inventory revision for an
+explicit root, without creating a location or inventory. Reject pending caller
+transactions and symlink/junction ancestors. Used by the
+[temporary sync workspace API](operation-workspaces.md); scope grants no authority.
+The [Plan 005.3 notebook](../notebooks/public/plan-005.3-operation-workspaces.ipynb)
+walks through the public workspace tools using temporary practice files and plain-language explanations.
+
+### `operation`
+
+```python
+operation(operation_id: str) -> OperationRecord | None
+```
+
+Read one operation summary, or `None`. A finalization receipt has a request digest
+and committed revision. Superseded/discarded records are publication fences, not
+success receipts. Receipts survive snapshot pruning and retain the original
+result even after later inventory changes.
+
+### `operations`
+
+```python
+operations(*, limit: int=100, offset: int=0) -> tuple[OperationRecord, ...]
+```
+
+Read a bounded page ordered by start timestamp and operation UUID. Positive limits
+and nonnegative offsets must fit SQLite integers; booleans are rejected. Records
+are immutable and contain scope, status, timestamps, complete aggregate counts,
+and optional receipt data. No permanent per-file manifest is stored in the Catalog.
+The internal finalization boundary atomically writes inventory, retention and
+receipt; there is no public copy/delete executor in 005.3.
 
 ## Scanning and reconciliation
 

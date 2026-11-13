@@ -216,12 +216,16 @@ or close readers before applying retention, including readers in other processes
 The API and [stream lifecycle](query-grammar.md#history-retention-and-stream-lifetime)
 documentation explain how pruning invalidates handles for deleted scans.
 
-## Schema 3 and inventory publication (Plan 005.1)
+## Schema compatibility and inventory publication
 
-New catalogs use schema 3. `catalog migrate` validates a current catalog but
+New catalogs use schema 4. `catalog migrate` explicitly upgrades schema 3 to 4,
+preserving inventory, UUIDs, tags and provenance; it is a no-op for schema 4.
+Opening a schema-3 catalog requests this explicit migration. Migration still
 rejects versions 1 and 2 without writes. Create a separate catalog and rescan to
 rebuild; rescanning does not recover tags/provenance. History and info show
 snapshot origin (`full_scan` or `targeted_update`). Completed snapshot totals
 represent known inventory; targeted inherited records are not fresh observations
 and no directory-completeness guarantee is implied. Targeted registration and
 publication retention are Python APIs; no new CLI workflow is introduced.
+Plan 005.3 adds Python-only temporary workspace storage and operation inspection;
+copy/delete execution and recovery CLI commands are not implemented.
